@@ -1,7 +1,7 @@
 import type { ServerProvider } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveSandboxRunOn } from "./sandboxRunOn";
+import { resolveSandboxRunOn } from "./sandboxRunOn.ts";
 
 const provider = (instanceId: string, driver: string, enabled = true) =>
   ({

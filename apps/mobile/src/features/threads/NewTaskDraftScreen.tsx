@@ -43,6 +43,7 @@ import { composerContextImportsAtom } from "../../state/use-composer-drafts";
 import { abortComposerDraftOperations } from "../../state/composerDraftOperations";
 import { composerContextSendBlockReason } from "../../lib/composerContext";
 import { ComposerInlineControl } from "../../components/ComposerToolbar";
+import { resolveSandboxRunOn } from "@t3tools/client-runtime/sandbox-run-on";
 
 import {
   composerAttachmentUploadBlockReason,
@@ -867,8 +868,45 @@ export function NewTaskDraftScreen(props: {
     </View>
   );
 
+  // Fork: Boat sandbox switches to the Boat instance of the same agent, in a new worktree.
+  const sandboxRunOn = resolveSandboxRunOn(flow.providers, flow.selectedModel?.instanceId ?? null);
+  const selectModelTarget = (target: { instanceId: string; model: string } | null) => {
+    if (!target) return;
+    const option =
+      flow.modelOptions.find(
+        (candidate) =>
+          candidate.selection.instanceId === target.instanceId &&
+          candidate.selection.model === target.model,
+      ) ??
+      flow.modelOptions.find((candidate) => candidate.selection.instanceId === target.instanceId);
+    if (option) flow.setSelectedModelKey(option.key);
+  };
+
   const workspaceControls = (
     <View className="flex-row items-center gap-1 px-2">
+      {sandboxRunOn ? (
+        <ComposerInlineControl
+          accessibilityLabel="Run on Boat sandbox"
+          accessibilityHint={
+            sandboxRunOn.active
+              ? "Runs the agent on this machine instead"
+              : "Runs the agent on its own Boat VM"
+          }
+          disabled={isComposerInteractionLocked}
+          icon="cloud"
+          label="Boat"
+          selected={sandboxRunOn.active}
+          showChevron={false}
+          onPress={() => {
+            if (sandboxRunOn.active) {
+              selectModelTarget(sandboxRunOn.leave);
+              return;
+            }
+            selectModelTarget(sandboxRunOn.enter);
+            if (flow.isGitRepo) flow.setWorkspaceMode("worktree");
+          }}
+        />
+      ) : null}
       <ComposerInlineControl
         accessibilityHint={`Switches to ${flow.workspaceMode === "local" ? "a new worktree" : "the current checkout"}`}
         accessibilityLabel={workspaceLabel}
@@ -882,7 +920,10 @@ export function NewTaskDraftScreen(props: {
         )}
         label={workspaceLabel}
         maxWidth="100%"
-        onPress={() => flow.setWorkspaceMode(flow.workspaceMode === "local" ? "worktree" : "local")}
+        onPress={() => {
+          if (sandboxRunOn?.active) selectModelTarget(sandboxRunOn.leave);
+          flow.setWorkspaceMode(flow.workspaceMode === "local" ? "worktree" : "local");
+        }}
         showChevron={false}
       />
 

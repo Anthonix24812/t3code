@@ -2909,6 +2909,10 @@ export default function ChatView(props: ChatViewProps) {
     providerStatuses,
     composerActiveProvider ?? threadProvider,
     onProviderModelSelectStable,
+    // The server mirrors the VM's changes into the thread's worktree, so a sandbox needs one.
+    () => {
+      if (!envLocked && envMode !== "worktree") onEnvModeChangeStable("worktree");
+    },
   );
   const { onResume, isResuming } = useComposerResume({
     environmentId,
@@ -3937,6 +3941,7 @@ export default function ChatView(props: ChatViewProps) {
                     ? { onEnvironmentChange: onEnvironmentChangeStable }
                     : {})}
                   onEnvModeChange={onEnvModeChangeStable}
+                  sandboxRunOn={sandboxRunOn}
                   envMode={envMode}
                   {...(canOverrideServerThreadEnvMode
                     ? {

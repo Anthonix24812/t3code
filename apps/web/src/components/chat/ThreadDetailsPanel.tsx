@@ -14,6 +14,7 @@ import type { ComposerThreadTarget, DraftId } from "../../composerDraftStore";
 import { useT3ProjectFileScripts } from "../../hooks/useT3ProjectFileScripts";
 import { type EnvMode, type EnvironmentOption } from "../BranchToolbar.logic";
 import { BranchToolbar } from "../BranchToolbar";
+import type { SandboxRunOnControl } from "../../sandbox/sandboxRunOn";
 import BaseGitActionsControl from "../GitActionsControl";
 import ProjectScriptsControl, {
   type NewProjectScriptInput,
@@ -76,6 +77,7 @@ interface ThreadDetailsPanelProps extends Pick<
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
   onEnvModeChange: (mode: EnvMode) => void;
   envMode: EnvMode;
+  sandboxRunOn?: SandboxRunOnControl | undefined;
   activeThreadBranchOverride?: string | null;
   onActiveThreadBranchOverrideChange?: (branch: string | null) => void;
   startFromOrigin: boolean;
@@ -122,6 +124,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
     startFromOrigin: props.startFromOrigin,
     onStartFromOriginChange: props.onStartFromOriginChange,
     envMode: props.envMode,
+    sandboxRunOn: props.sandboxRunOn,
     ...(props.activeThreadBranchOverride !== undefined
       ? { activeThreadBranchOverride: props.activeThreadBranchOverride }
       : {}),
