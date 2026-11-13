@@ -174,6 +174,21 @@ describe("SandboxProvisioner", () => {
     }).pipe(provide(fake, new Map([[threadId, liveShell]])));
   });
 
+  it.effect("lets only a live thread on a Boat instance start a VM", () => {
+    const other = ThreadId.make("thread-on-claude");
+    const shells = new Map<ThreadId, unknown>([
+      [threadId, { ...liveShell, modelSelection: { instanceId: "boatClaude", model: "default" } }],
+      [other, { ...liveShell, modelSelection: { instanceId: "claudeAgent", model: "opus" } }],
+    ]);
+    return Effect.gen(function* () {
+      const provisioner = yield* SandboxProvisioner;
+      expect(yield* provisioner.isSandboxThread(threadId)).toBe(true);
+      // An inherited T3CODE_THREAD_ID can name a thread that is not on Boat, or none at all.
+      expect(yield* provisioner.isSandboxThread(other)).toBe(false);
+      expect(yield* provisioner.isSandboxThread(ThreadId.make("missing"))).toBe(false);
+    }).pipe(provide(fakeDriver(), shells));
+  });
+
   it.effect("destroys the VM of a thread that was deleted or archived", () => {
     const fake = fakeDriver();
     const shells = new Map<ThreadId, unknown>([[threadId, liveShell]]);

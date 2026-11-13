@@ -72,10 +72,14 @@ export class AcpBridgeSession {
   private busy = false;
 
   private readonly deps: AcpBridgeDeps;
-  /** The provider probe has no thread; it must be answered without a VM. */
-  private readonly probe: boolean;
+  /**
+   * True for the provider probe and any process that is not a Boat thread's session; those are
+   * answered here and never start a VM. The server decides, since an inherited env can name a
+   * thread that is not on Boat.
+   */
+  private readonly probe: Promise<boolean>;
 
-  constructor(deps: AcpBridgeDeps, probe: boolean) {
+  constructor(deps: AcpBridgeDeps, probe: Promise<boolean>) {
     this.deps = deps;
     this.probe = probe;
   }
@@ -105,15 +109,16 @@ export class AcpBridgeSession {
     const { id, method } = message;
     if (method === "initialize") {
       this.initializeParams = message.params ?? {};
+      // A v1-shaped answer makes T3 speak v1; the remote agent is initialized at v1 to match.
       this.reply(id, {
-        protocolVersion: (message.params?.protocolVersion as number | undefined) ?? 1,
+        protocolVersion: 1,
         agentCapabilities: BRIDGE_AGENT_CAPABILITIES,
         authMethods: [],
         agentInfo: { name: "t3-boat-sandbox", version: "1" },
       });
       return;
     }
-    if (this.probe) {
+    if (await this.probe) {
       if (id !== undefined && id !== null) {
         this.reply(id, method === "session/new" ? { sessionId: PROBE_SESSION_ID } : {});
       }
@@ -204,7 +209,9 @@ export class AcpBridgeSession {
       for (const line of buffered.splice(0)) this.handleRemoteLine(partial, line);
       // T3 advertises no client fs or terminal, so the agent uses the VM's own.
       const initialized = await this.request(partial, "initialize", {
-        ...this.initializeParams,
+        protocolVersion: 1,
+        clientInfo: this.initializeParams.clientInfo ??
+          this.initializeParams.info ?? { name: "t3-code", version: "0" },
         clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
       });
       const capabilities = (initialized.result as { agentCapabilities?: { loadSession?: boolean } })

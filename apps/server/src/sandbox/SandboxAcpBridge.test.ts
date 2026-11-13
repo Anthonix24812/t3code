@@ -51,7 +51,7 @@ function harness(options: { loadSession: boolean; probe?: boolean }) {
         };
       },
     },
-    options.probe ?? false,
+    Promise.resolve(options.probe ?? false),
   );
   const send = async (message: Message) => {
     session.handleHostLine(JSON.stringify({ jsonrpc: "2.0", ...message }));
@@ -94,6 +94,7 @@ describe("AcpBridgeSession", () => {
     });
     expect(bridge.connects()).toBe(1);
     const [initialize, created] = bridge.remoteReceived;
+    expect(initialize!.params.protocolVersion).toBe(1);
     expect(initialize!.params.clientCapabilities).toEqual({
       fs: { readTextFile: false, writeTextFile: false },
       terminal: false,

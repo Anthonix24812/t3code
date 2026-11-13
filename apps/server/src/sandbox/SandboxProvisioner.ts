@@ -13,6 +13,7 @@ import {
   SANDBOX_AGENT_LABELS,
   SandboxAgent,
   SandboxError,
+  isSandboxProviderInstanceId,
   type ProviderInstanceConfig,
   type SandboxRecord,
   type SandboxSettings,
@@ -82,6 +83,8 @@ export class SandboxProvisioner extends Context.Service<
       readonly agent: SandboxAgent;
       readonly hostCwd: string;
     }) => Effect.Effect<SandboxEndpoint, SandboxError>;
+    /** Only a live thread whose provider is a Boat instance may start a VM. */
+    readonly isSandboxThread: (threadId: ThreadId) => Effect.Effect<boolean>;
     readonly setBusy: (threadId: ThreadId, busy: boolean) => Effect.Effect<void>;
     /** A stop or destroy ends the registered bridges' relay connections; returns the unregister. */
     readonly registerBridge: (threadId: ThreadId, bridge: AcpBridgeSession) => () => void;
@@ -357,8 +360,21 @@ const make = Effect.gen(function* () {
     return { configured: resolveBoatApiKey(settings) !== "", sandboxes: rows.map(toSandboxRecord) };
   });
 
+  const isSandboxThread = (threadId: ThreadId) =>
+    orchestrator.getThreadShell(threadId).pipe(
+      Effect.map(
+        (shell) =>
+          shell !== null &&
+          shell.archivedAt === null &&
+          shell.deletedAt === null &&
+          isSandboxProviderInstanceId(shell.modelSelection.instanceId),
+      ),
+      Effect.orElseSucceed(() => false),
+    );
+
   return SandboxProvisioner.of({
     list,
+    isSandboxThread,
     ensureSession,
     setBusy,
     stop,
@@ -482,7 +498,9 @@ const start = Effect.gen(function* () {
           return { channel, remoteCwd: endpoint.remoteCwd };
         },
       },
-      threadId === null,
+      threadId === null
+        ? Promise.resolve(true)
+        : runPromise(provisioner.isSandboxThread(threadId)).then((isSandbox) => !isSandbox),
     );
     const unregister = threadId ? provisioner.registerBridge(threadId, session) : () => undefined;
     return {
