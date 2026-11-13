@@ -1,0 +1,86 @@
+# Fork-only: opens a PR that merges a new upstream T3 Code release into this fork. Never merges it.
+name: Upstream sync
+
+on:
+  schedule:
+    - cron: "23 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository != 'pingdotgg/t3code'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Compare the latest upstream release with fork-upstream.json
+        id: release
+        run: |
+          upstream=$(jq -r .upstream fork-upstream.json)
+          base=$(jq -r .baseTag fork-upstream.json)
+          # The newest non-draft, non-prerelease release; nightlies do not open PRs.
+          tag=$(gh api "repos/$upstream/releases/latest" --jq .tag_name)
+          newer=$(node -e '
+            const parse = (v) => { const [core, pre] = v.replace(/^v/, "").split("-", 2); return { n: core.split(".").map(Number), pre }; };
+            const [a, b] = [parse(process.argv[1]), parse(process.argv[2])];
+            for (let i = 0; i < 3; i++) if (a.n[i] !== b.n[i]) { console.log(a.n[i] > b.n[i]); process.exit(0); }
+            console.log(Boolean(b.pre) && !a.pre);
+          ' "$tag" "$base")
+          branch="sync/upstream-$tag"
+          if [ "$newer" != "true" ]; then
+            echo "Upstream $tag is not newer than base $base."
+          elif git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            echo "A sync branch for $tag already exists."
+            newer=false
+          fi
+          { echo "upstream=$upstream"; echo "base=$base"; echo "tag=$tag"; echo "branch=$branch"; echo "newer=$newer"; } >> "$GITHUB_OUTPUT"
+
+      - name: Merge the release into a sync branch
+        if: steps.release.outputs.newer == 'true'
+        env:
+          UPSTREAM: ${{ steps.release.outputs.upstream }}
+          TAG: ${{ steps.release.outputs.tag }}
+          BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "https://github.com/$UPSTREAM.git"
+          git fetch --no-tags upstream "refs/tags/$TAG:refs/tags/$TAG"
+          git switch -c "$BRANCH"
+          if ! git merge --no-edit "$TAG"; then
+            git diff --name-only --diff-filter=U | sed 's/^/conflict: /'
+            echo "::error::Merging $TAG conflicts. Sync by hand as FORK.md describes."
+            exit 1
+          fi
+          sha=$(git rev-parse "$TAG^{commit}")
+          jq --arg tag "$TAG" --arg sha "$sha" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '.baseTag = $tag | .baseSha = $sha | .checkedAt = $at' fork-upstream.json > fork-upstream.json.next
+          mv fork-upstream.json.next fork-upstream.json
+          git commit -am "chore: record upstream base $TAG"
+          git push origin "$BRANCH"
+
+      - name: Open the sync PR
+        if: steps.release.outputs.newer == 'true'
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          BASE: ${{ steps.release.outputs.base }}
+          BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          body=$(printf '%s\n\n%s\n' \
+            "Merges upstream \`$TAG\` (previous base \`$BASE\`) and updates \`fork-upstream.json\`." \
+            "Review the fork hooks listed in FORK.md, run \`vp run check:changed\` and the sandbox tests, then merge by hand. PRs opened with the workflow token do not start other workflows, so push a commit or re-run CI to get checks.")
+          gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
+            --title "chore: sync upstream T3 Code $TAG" --body "$body"

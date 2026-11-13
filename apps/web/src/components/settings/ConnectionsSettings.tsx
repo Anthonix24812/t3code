@@ -146,6 +146,7 @@ import {
   type ConnectDeviceRevokeRequest,
   RevokeConnectDeviceDialog,
 } from "./RevokeConnectDeviceDialog";
+import { SandboxSettings } from "../../sandbox/SandboxSettings";
 
 // Sessions T3 Connect minted for a device signed in to the linked account.
 const CLOUD_CONNECT_SESSION_SUBJECT = "cloud-connect";
@@ -1737,6 +1738,7 @@ function ConnectionsSettingsContent({
           isSearchTarget={index === 0}
         />
       ))}
+      {primaryEnvironmentId ? <SandboxSettings environmentId={primaryEnvironmentId} /> : null}
       <LoadBalancingSettings environments={loadBalancingEnvironments} />
       <PullRequestRoutingSettings environments={loadBalancingEnvironments} />
     </SettingsPageContainer>

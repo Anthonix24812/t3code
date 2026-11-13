@@ -1,6 +1,6 @@
 import { ComposerSelectControl } from "./chat/ComposerControl";
 import { ComposerContextLabel } from "./ComposerContextLabel";
-import { FolderGit2Icon, FolderGitIcon, FolderIcon } from "lucide-react";
+import { CloudIcon, FolderGit2Icon, FolderGitIcon, FolderIcon } from "lucide-react";
 import { memo, type MouseEvent as ReactMouseEvent } from "react";
 
 import {
@@ -23,8 +23,10 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { useAtomValue } from "@effect/atom-react";
 import { shortcutLabelForCommand } from "../keybindings";
 import { primaryServerKeybindingsAtom } from "../state/server";
+import type { SandboxRunOnControl } from "../sandbox/sandboxRunOn";
 
 const PREVIOUS_WORKTREE_SELECT_VALUE = "previous-worktree";
+const SANDBOX_SELECT_VALUE = "boat-sandbox";
 
 interface BranchToolbarEnvModeSelectorProps {
   forceNewWorktree?: boolean;
@@ -35,6 +37,8 @@ interface BranchToolbarEnvModeSelectorProps {
   previousWorktreeLabel?: string | null;
   previousWorktreeBranch?: string | null;
   onUsePreviousWorktree?: () => void;
+  /** Fork: "Run on → Boat sandbox", present only when a Boat key is configured. */
+  sandboxRunOn?: SandboxRunOnControl | undefined;
 }
 
 export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSelector({
@@ -46,6 +50,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
   previousWorktreeLabel,
   previousWorktreeBranch = null,
   onUsePreviousWorktree,
+  sandboxRunOn,
 }: BranchToolbarEnvModeSelectorProps) {
   const composerFloatingLayerProps = useComposerMenuProps();
   const shortcutLabel = shortcutLabelForCommand(
@@ -62,6 +67,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
     ...(showPreviousWorktree && previousWorktreeLabel
       ? [{ value: PREVIOUS_WORKTREE_SELECT_VALUE, label: previousWorktreeLabel }]
       : []),
+    ...(sandboxRunOn ? [{ value: SANDBOX_SELECT_VALUE, label: "Boat sandbox" }] : []),
   ];
 
   const stopContextMenuMouseDown = (event: ReactMouseEvent) => {
@@ -107,8 +113,13 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
   return (
     <Select
       modal={false}
-      value={effectiveEnvMode}
+      value={sandboxRunOn?.active ? SANDBOX_SELECT_VALUE : effectiveEnvMode}
       onValueChange={(value: string | null) => {
+        if (value === SANDBOX_SELECT_VALUE) {
+          sandboxRunOn?.enter();
+          return;
+        }
+        if (sandboxRunOn?.active) sandboxRunOn.leave();
         if (value === PREVIOUS_WORKTREE_SELECT_VALUE) {
           onUsePreviousWorktree?.();
           return;
@@ -130,7 +141,9 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
             />
           }
         >
-          {effectiveEnvMode === "worktree" ? (
+          {sandboxRunOn?.active ? (
+            <CloudIcon className="size-3" />
+          ) : effectiveEnvMode === "worktree" ? (
             <FolderGit2Icon className="size-3" />
           ) : activeWorktreePath ? (
             <FolderGitIcon className="size-3" />
@@ -177,6 +190,17 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
             </SelectItem>
           ) : null}
         </SelectGroup>
+        {sandboxRunOn ? (
+          <SelectGroup>
+            <SelectGroupLabel>Run on</SelectGroupLabel>
+            <SelectItem value={SANDBOX_SELECT_VALUE}>
+              <span className="inline-flex items-center gap-1.5">
+                <CloudIcon className="size-3" />
+                Boat sandbox
+              </span>
+            </SelectItem>
+          </SelectGroup>
+        ) : null}
       </SelectPopup>
     </Select>
   );
