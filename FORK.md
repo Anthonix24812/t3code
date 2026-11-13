@@ -57,8 +57,10 @@ the agent's MCP calls back here
 ## Syncing with upstream
 
 The scheduled [upstream-sync workflow](.github/workflows/upstream-sync.yml) opens a PR named
-`chore: sync upstream T3 Code <tag>` when upstream publishes a release. It never merges. To sync by
-hand, or when that PR conflicts:
+`chore: sync upstream T3 Code <tag>` when upstream publishes a release. It never merges. Both
+follow stable releases by default. To include nightly builds, turn on Settings → About → Include
+nightly builds for the in-app notice, and set the repository variable
+`UPSTREAM_SYNC_CHANNEL=nightly` for the workflow. To sync by hand, or when that PR conflicts:
 
 ```sh
 git fetch upstream --tags

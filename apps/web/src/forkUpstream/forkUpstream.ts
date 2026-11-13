@@ -38,25 +38,79 @@ export function upstreamNotice(
   return { latestVersion, baseVersion, releaseUrl: latest.html_url, syncUrl: FORK_SYNC_URL };
 }
 
-let current: UpstreamNotice | null = null;
+export type UpstreamChannel = "stable" | "nightly";
+
+const VERSION_TAG = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+/** The newest non-draft release with a version tag; other tags such as `update-feed` are skipped. */
+export function newestRelease(releases: ReadonlyArray<UpstreamRelease>): UpstreamRelease | null {
+  let newest: UpstreamRelease | null = null;
+  for (const release of releases) {
+    if (release.draft || !VERSION_TAG.test(release.tag_name)) continue;
+    if (
+      newest === null ||
+      compareSemverVersions(stripV(release.tag_name), stripV(newest.tag_name)) > 0
+    ) {
+      newest = release;
+    }
+  }
+  return newest;
+}
+
+const CHANNEL_KEY = "t3.forkUpstream.channel";
+const readChannel = (): UpstreamChannel => {
+  try {
+    return localStorage.getItem(CHANNEL_KEY) === "nightly" ? "nightly" : "stable";
+  } catch {
+    return "stable";
+  }
+};
+
+interface UpstreamState {
+  readonly channel: UpstreamChannel;
+  readonly notice: UpstreamNotice | null;
+}
+
+let state: UpstreamState = { channel: readChannel(), notice: null };
 let started = false;
 const listeners = new Set<() => void>();
+const publish = (next: UpstreamState) => {
+  state = next;
+  for (const listener of listeners) listener();
+};
+
+async function fetchLatest(channel: UpstreamChannel): Promise<UpstreamRelease | null> {
+  const base = `https://api.github.com/repos/${forkUpstream.upstream}/releases`;
+  // `releases/latest` skips drafts and prereleases; nightlies need the list.
+  const response = await fetch(channel === "stable" ? `${base}/latest` : `${base}?per_page=20`, {
+    headers: { Accept: "application/vnd.github+json" },
+  });
+  if (!response.ok) return null;
+  const body = (await response.json()) as UpstreamRelease | ReadonlyArray<UpstreamRelease>;
+  return Array.isArray(body) ? newestRelease(body) : newestRelease([body as UpstreamRelease]);
+}
 
 async function check() {
+  const channel = state.channel;
   try {
-    // `releases/latest` is the newest non-draft, non-prerelease release, so nightlies do not nag.
-    const response = await fetch(
-      `https://api.github.com/repos/${forkUpstream.upstream}/releases/latest`,
-      { headers: { Accept: "application/vnd.github+json" } },
-    );
-    if (!response.ok) return;
-    const next = upstreamNotice(forkUpstream.baseTag, (await response.json()) as UpstreamRelease);
-    if (next?.latestVersion === current?.latestVersion) return;
-    current = next;
-    for (const listener of listeners) listener();
+    const latest = await fetchLatest(channel);
+    if (latest === null || channel !== state.channel) return;
+    const notice = upstreamNotice(forkUpstream.baseTag, latest);
+    if (notice?.latestVersion === state.notice?.latestVersion) return;
+    publish({ channel, notice });
   } catch {
     // Offline or rate limited: keep the last answer and try again on the next poll.
   }
+}
+
+export function setUpstreamChannel(channel: UpstreamChannel) {
+  try {
+    localStorage.setItem(CHANNEL_KEY, channel);
+  } catch {
+    // Private mode: the choice lasts for this session only.
+  }
+  publish({ channel, notice: null });
+  void check();
 }
 
 function subscribe(listener: () => void) {
@@ -71,12 +125,16 @@ function subscribe(listener: () => void) {
   return () => listeners.delete(listener);
 }
 
-export function useUpstreamNotice(): UpstreamNotice | null {
+const SERVER_STATE: UpstreamState = { channel: "stable", notice: null };
+
+export function useUpstreamState(): UpstreamState {
   return useSyncExternalStore(
     subscribe,
-    () => current,
-    () => null,
+    () => state,
+    () => SERVER_STATE,
   );
 }
+
+export const useUpstreamNotice = () => useUpstreamState().notice;
 
 export const FORK_BASE_VERSION = stripV(forkUpstream.baseTag);

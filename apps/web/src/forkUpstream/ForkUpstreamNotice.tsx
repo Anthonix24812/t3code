@@ -3,8 +3,15 @@ import { CircleArrowUpIcon } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { SidebarMenuButton, SidebarMenuItem } from "../components/ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
+import { Switch } from "../components/ui/switch";
 import { SettingsRow } from "../components/settings/settingsLayout";
-import { FORK_BASE_VERSION, FORK_SYNC_URL, useUpstreamNotice } from "./forkUpstream";
+import {
+  FORK_BASE_VERSION,
+  FORK_SYNC_URL,
+  setUpstreamChannel,
+  useUpstreamNotice,
+  useUpstreamState,
+} from "./forkUpstream";
 
 const externalLink = (href: string) => <a href={href} target="_blank" rel="noreferrer noopener" />;
 
@@ -31,20 +38,37 @@ export function SidebarForkUpstreamNotice() {
 
 /** Fork: Settings → About row. */
 export function AboutForkUpstreamRow() {
-  const notice = useUpstreamNotice();
+  const { channel, notice } = useUpstreamState();
   return (
-    <SettingsRow
-      title="Upstream"
-      description={
-        notice
-          ? `Upstream T3 ${notice.latestVersion} is out; this build is based on ${notice.baseVersion}.`
-          : `This fork is based on upstream T3 ${FORK_BASE_VERSION}.`
-      }
-      control={
-        <Button size="sm" variant="outline" render={externalLink(notice?.syncUrl ?? FORK_SYNC_URL)}>
-          Sync instructions
-        </Button>
-      }
-    />
+    <>
+      <SettingsRow
+        title="Upstream"
+        description={
+          notice
+            ? `Upstream T3 ${notice.latestVersion} is out; this build is based on ${notice.baseVersion}.`
+            : `This fork is based on upstream T3 ${FORK_BASE_VERSION}.`
+        }
+        control={
+          <Button
+            size="sm"
+            variant="outline"
+            render={externalLink(notice?.syncUrl ?? FORK_SYNC_URL)}
+          >
+            Sync instructions
+          </Button>
+        }
+      />
+      <SettingsRow
+        title="Include nightly builds"
+        description="Also tell me about upstream nightly builds. Off: only stable releases."
+        control={
+          <Switch
+            checked={channel === "nightly"}
+            onCheckedChange={(checked) => setUpstreamChannel(checked ? "nightly" : "stable")}
+            aria-label="Include nightly builds"
+          />
+        }
+      />
+    </>
   );
 }
