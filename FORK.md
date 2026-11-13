@@ -20,13 +20,19 @@ releases. Never point it at `pingdotgg/t3code`.
    bundle to `/home/user/work/<name>`, applies your uncommitted changes (untracked files included,
    ignored files left out) as a patch, and runs the agent there.
 
-Agents on the VM get no credentials from this machine unless you opt in: on the Boat provider
-instance in Settings → Providers, add environment variables named `T3_SANDBOX_ENV_<NAME>`, for
-example `T3_SANDBOX_ENV_ANTHROPIC_API_KEY`, `T3_SANDBOX_ENV_CLAUDE_CODE_OAUTH_TOKEN`,
-`T3_SANDBOX_ENV_OPENAI_API_KEY` or `T3_SANDBOX_ENV_GEMINI_API_KEY`. The agent sees them without
-the prefix. Your local CLI logins and the server's own env stay here. The values travel inside
-the TLS connection to the VM's relay and never appear in a command or on the VM's snapshotted
-disk.
+Agents on the VM use this machine's subscription logins by default (Settings → Environments →
+Boat sandbox → Use this machine's logins). Claude gets the Claude Code sign-in's access token, from
+the macOS keychain or `~/.claude/.credentials.json`, held only in the agent's memory. Codex gets
+the ChatGPT sign-in from `~/.codex/auth.json`, written 0600 to the VM home and deleted when the
+session ends. No API key goes over, and no refresh token either, because a VM refreshing a
+rotating token would sign this machine out. Logins are read again on every connection, so a
+resume picks up a sign-in refreshed here. An expired Claude login is not copied. Use Claude here
+once and send again.
+
+As a fallback, variables set on the Boat provider instance in Settings → Providers as
+`T3_SANDBOX_ENV_<NAME>` reach the agent without the prefix and take precedence. The server's own
+env stays here. Everything travels inside the TLS connection to the VM's relay, never in a command
+or a log.
 
 The thread stays a normal thread on this server, so the phone and other clients see it. A VM
 stops after the idle window and resumes from its snapshot on the next message. Archiving or
@@ -39,7 +45,8 @@ running in the project root keeps your checkout untouched and its diffs stay emp
 
 Tasks: the agent on the VM gets T3's own tools through the relay, plus `github_issue_create` and
 `sandbox_capacity`. `delegate_task` with `isolation: "worktree"` and a Boat provider starts a task
-thread with its own worktree, branch and VM. That task can split off more tasks. Pull requests
+thread with its own worktree, branch and VM, starting from the parent VM's current changes. That
+task can split off more tasks. Pull requests
 and issues are opened on this machine with your GitHub login, which never goes to a VM. The
 thread-scoped T3 credential never goes there either: the server adds it to each tunneled call.
 A thread tree runs at most 4 VMs at once (Settings → Environments → Boat sandbox → VMs per thread

@@ -44,6 +44,8 @@ export const SandboxSettings = Schema.Struct({
   maxConcurrentVms: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 20 })).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SANDBOX_MAX_CONCURRENT_VMS)),
   ),
+  /** Copies this machine's Claude and ChatGPT (Codex) logins to each VM session. */
+  copyHostLogins: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 });
 export type SandboxSettings = typeof SandboxSettings.Type;
 export const DEFAULT_SANDBOX_SETTINGS: SandboxSettings = Schema.decodeSync(SandboxSettings)({});
@@ -53,6 +55,7 @@ export const SandboxSettingsPatch = Schema.Struct({
   size: Schema.optionalKey(SandboxSize),
   idleMinutes: Schema.optionalKey(Schema.Int),
   maxConcurrentVms: Schema.optionalKey(Schema.Int),
+  copyHostLogins: Schema.optionalKey(Schema.Boolean),
 });
 
 export const SandboxState = Schema.Literals([

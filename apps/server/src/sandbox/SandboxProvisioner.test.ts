@@ -41,12 +41,18 @@ function fakeDriver(options: { failFirstCreate?: boolean } = {}) {
     },
     destroy: async () => void calls.push({ name: "destroy" }),
     status: async () => status,
-    exec: async (_id, input) => {
+    exec: async (id, input) => {
       calls.push({ name: "exec", input: input.script.split("\n")[0] });
-      return { exitCode: 0, stdout: "", stderr: "" };
+      const readsChanges = input.script.includes("git diff --cached --binary");
+      return { exitCode: 0, stdout: readsChanges ? `changes on ${id}\n` : "", stderr: "" };
     },
     startDetached: async () => void calls.push({ name: "startDetached" }),
-    writeFile: async (_id, file) => void calls.push({ name: "writeFile", input: file.path }),
+    writeFile: async (_id, file) => {
+      calls.push({ name: "writeFile", input: file.path });
+      if (file.path.endsWith("project.patch")) {
+        calls.push({ name: "patch", input: Buffer.from(file.content).toString("utf8") });
+      }
+    },
     exposePort: async () => {
       calls.push({ name: "exposePort" });
       return "https://abc-4710.on.boat.dev";
@@ -83,6 +89,7 @@ function provide(
       Effect.provideService(SandboxProjectReader, async () => ({
         bundle: new Uint8Array([1, 2, 3]),
         patch: null,
+        base: "c0ffee",
         branch: "main",
         originUrl: "git@github.com:me/app.git",
         directoryName: "app",
@@ -221,6 +228,27 @@ describe("SandboxProvisioner", () => {
       yield* provisioner.stop(taskA!);
       yield* start(taskB!);
     }).pipe(provide(fake, shells, 2));
+  });
+
+  it.effect("starts a task's VM from its parent VM's current changes", () => {
+    const parent = ThreadId.make("parent");
+    const task = ThreadId.make("task");
+    const shells = new Map<ThreadId, unknown>([
+      [parent, { ...liveShell, lineage: { rootThreadId: parent, parentThreadId: null } }],
+      [task, { ...liveShell, lineage: { rootThreadId: parent, parentThreadId: parent } }],
+    ]);
+    const fake = fakeDriver();
+    return Effect.gen(function* () {
+      const provisioner = yield* SandboxProvisioner;
+      const start = (threadId: ThreadId) =>
+        provisioner.ensureSession({ threadId, agent: "claude", hostCwd: "/Users/me/app" });
+      yield* start(parent);
+      expect(fake.calls.filter((call) => call.name === "patch")).toEqual([]);
+      yield* start(task);
+      expect(fake.calls.filter((call) => call.name === "patch")).toEqual([
+        { name: "patch", input: "changes on bx_1\n" },
+      ]);
+    }).pipe(provide(fake, shells));
   });
 
   it.effect("destroys the VM of a thread that was deleted or archived", () => {

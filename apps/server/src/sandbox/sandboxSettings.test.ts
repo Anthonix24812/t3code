@@ -39,6 +39,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("sandbox settings
         size: "large",
         idleMinutes: 5,
         maxConcurrentVms: 4,
+        copyHostLogins: true,
       });
       assert.notInclude(yield* fs.readFileString(config.settingsPath), key);
       const forClient = ServerSettingsModule.redactServerSettingsForClient(settings, {

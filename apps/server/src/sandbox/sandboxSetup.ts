@@ -171,7 +171,8 @@ const installToolsScript = () =>
 const SANDBOX_RELAY_SOURCE = String.raw`
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { createInterface } from "node:readline";
 import { createRequire } from "node:module";
@@ -197,12 +198,20 @@ const tokenMatches = (token) => {
 wss.on("connection", (socket) => {
   let child = null;
   const key = randomUUID();
+  const written = [];
   socket.once("message", (data) => {
     let hello;
     try { hello = JSON.parse(String(data)); } catch { return socket.close(4400, "bad hello"); }
     if (!tokenMatches(hello.token)) return socket.close(4401, "unauthorized");
     const command = agents[hello.agent];
     if (!command) return socket.close(4404, "unknown agent");
+    // Copied logins: private to the sandbox user, and removed again when the session ends.
+    for (const file of hello.files ?? []) {
+      if (typeof file.path !== "string" || !file.path.startsWith("/home/user/")) continue;
+      mkdirSync(dirname(file.path), { recursive: true, mode: 0o700 });
+      writeFileSync(file.path, String(file.content), { mode: 0o600 });
+      written.push(file.path);
+    }
     sockets.set(key, socket);
     const env = { ...process.env, ...hello.env, T3_SANDBOX_TUNNEL_URL: "http://127.0.0.1:" + tunnelPort + "/" + key };
     delete env.TOKEN_PATH;
@@ -232,6 +241,7 @@ wss.on("connection", (socket) => {
   socket.on("close", () => {
     sockets.delete(key);
     child?.kill("SIGTERM");
+    for (const path of written) rmSync(path, { force: true });
   });
 });
 server.listen(Number(process.env.RELAY_PORT), "0.0.0.0");
@@ -314,6 +324,8 @@ export interface SandboxProjectSource {
   readonly bundle: Uint8Array;
   /** Uncommitted changes, untracked files included, applied once on top of the clone. */
   readonly patch: Uint8Array | null;
+  /** The commit the bundle's checkout and the patch start from. */
+  readonly base: string;
   readonly branch: string | null;
   readonly originUrl: string | null;
   readonly directoryName: string;

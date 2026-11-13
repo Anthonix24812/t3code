@@ -52,6 +52,7 @@ import {
   type SandboxProjectSource,
 } from "./sandboxSetup.ts";
 import { forwardToT3Mcp, handleSandboxMcp } from "./sandboxTunnel.ts";
+import { nodeHostLoginSources, readHostLogins } from "./sandboxLogins.ts";
 
 const execFileAsync = NodeUtil.promisify(NodeChildProcess.execFile);
 const decodeSandboxAgent = Schema.decodeUnknownOption(SandboxAgent);
@@ -206,6 +207,39 @@ const make = Effect.gen(function* () {
     }
   });
 
+  /**
+   * The parent VM's working tree on top of `base`, for a task thread split off a Boat thread.
+   * `null` when there is no running parent VM; the task then starts from its own checkout.
+   */
+  const parentChanges = Effect.fn("SandboxProvisioner.parentChanges")(
+    function* (threadId: ThreadId, base: string) {
+      const shell = yield* orchestrator.getThreadShell(threadId);
+      const parentId = shell?.lineage.parentThreadId ?? null;
+      if (parentId === null) return null;
+      const endpoint = live.get(parentId);
+      const parent = yield* records.get(parentId);
+      if (!endpoint || !parent?.boatSandboxId || parent.state !== "running") return null;
+      const driver = yield* driverFor(yield* sandboxSettings);
+      const patch = yield* call("Could not read the parent VM's changes", () =>
+        execOrThrow(
+          driver,
+          parent.boatSandboxId!,
+          { script: vmWorkingTreePatchScript(endpoint.remoteCwd, base), timeoutMs: 120_000 },
+          "Reading the parent VM's changes",
+        ),
+      );
+      return patch.length > 0 ? Buffer.from(patch) : null;
+    },
+    (effect) =>
+      effect.pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("task starts without its parent's changes", { cause }).pipe(
+            Effect.as(null),
+          ),
+        ),
+      ),
+  );
+
   const mirror = Effect.fn("SandboxProvisioner.mirror")(
     function* (threadId: ThreadId, hostCwd: string) {
       const shell = yield* orchestrator.getThreadShell(threadId);
@@ -313,9 +347,12 @@ const make = Effect.gen(function* () {
       }
       const id = row.boatSandboxId!;
       if (row.remoteCwd === null) {
-        const source = yield* call("Could not read the project's git state", () =>
+        const local = yield* call("Could not read the project's git state", () =>
           readProject(input.hostCwd),
         );
+        // A task starts from its parent's current work, which lives on the parent's VM.
+        const fromParent = yield* parentChanges(input.threadId, local.base);
+        const source = fromParent === null ? local : { ...local, patch: fromParent };
         yield* call("Could not set up the VM", () => bootstrapSandbox(driver, id, source));
         row = { ...row, remoteCwd: remoteProjectPath(source.directoryName) };
         yield* save(row);
@@ -584,12 +621,19 @@ const start = Effect.gen(function* () {
           const endpoint = await runPromise(
             provisioner.ensureSession({ threadId: threadId!, agent: agent.value, hostCwd }),
           );
+          // Re-read on every connection, so a resume picks up logins refreshed on this machine.
+          const logins = (await runPromise(settingsService.getSettings)).sandbox.copyHostLogins
+            ? await readHostLogins(agent.value, nodeHostLoginSources(platform))
+            : { env: {}, files: [], notes: [] };
+          for (const note of logins.notes) void runPromise(Effect.logWarning(note));
           const channel = await connectRelayWebSocket({
             url: endpoint.url,
             hello: {
               token: endpoint.token,
               agent: agent.value,
-              env: hello.env,
+              // T3_SANDBOX_ENV_* set on the provider instance win over the copied logins.
+              env: { ...logins.env, ...hello.env },
+              files: logins.files,
               cwd: endpoint.remoteCwd,
             },
             onMessage: handlers.onMessage,

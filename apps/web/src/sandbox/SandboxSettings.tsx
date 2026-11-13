@@ -15,6 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../components/ui/select";
+import { Switch } from "../components/ui/switch";
 import { SecretInput } from "../components/settings/SecretInput";
 import { SettingsRow, SettingsSection } from "../components/settings/settingsLayout";
 import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../hooks/useSettings";
@@ -58,8 +59,17 @@ export function SandboxSettings({ environmentId }: { readonly environmentId: Env
         }
       />
       <SettingsRow
-        title="Agent credentials"
-        description="Agents on a VM get none of this machine's logins or keys. Add T3_SANDBOX_ENV_ANTHROPIC_API_KEY (or OPENAI_, GEMINI_…) to a Boat provider's environment in Settings → Providers."
+        title="Use this machine's logins"
+        description="VMs get this machine's Claude and ChatGPT (Codex) sign-in, never an API key or refresh token. T3_SANDBOX_ENV_<NAME> variables on a Boat provider take precedence."
+        control={
+          <Switch
+            checked={sandbox.copyHostLogins}
+            onCheckedChange={(checked) =>
+              updateSettings({ sandbox: { copyHostLogins: Boolean(checked) } })
+            }
+            aria-label="Use this machine's logins"
+          />
+        }
       />
       <SettingsRow
         title="VM size"

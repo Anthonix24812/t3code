@@ -70,6 +70,7 @@ export async function readProjectSource(hostCwd: string): Promise<SandboxProject
   return {
     bundle,
     patch: patch.byteLength > 0 ? patch : null,
+    base,
     branch,
     originUrl: await gitOrNull(root, ["remote", "get-url", "origin"]),
     directoryName: NodePath.basename(root).replace(/[^A-Za-z0-9._-]/g, "-") || "project",
