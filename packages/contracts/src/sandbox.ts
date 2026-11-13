@@ -31,6 +31,7 @@ export const isSandboxProviderInstanceId = (instanceId: string) =>
   SANDBOX_AGENTS.some((agent) => sandboxProviderInstanceId(agent) === instanceId);
 
 export const DEFAULT_SANDBOX_IDLE_MINUTES = 15;
+export const DEFAULT_SANDBOX_MAX_CONCURRENT_VMS = 4;
 
 export const SandboxSettings = Schema.Struct({
   boatApiKey: SettingsSecretValue.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
@@ -38,6 +39,10 @@ export const SandboxSettings = Schema.Struct({
   /** 0 never stops an idle VM; the provider's own TTL still applies. */
   idleMinutes: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 24 * 60 })).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SANDBOX_IDLE_MINUTES)),
+  ),
+  /** Boat VMs a thread and the tasks it splits off may run at once. */
+  maxConcurrentVms: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 20 })).pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SANDBOX_MAX_CONCURRENT_VMS)),
   ),
 });
 export type SandboxSettings = typeof SandboxSettings.Type;
@@ -47,6 +52,7 @@ export const SandboxSettingsPatch = Schema.Struct({
   boatApiKey: Schema.optionalKey(SettingsSecretValue),
   size: Schema.optionalKey(SandboxSize),
   idleMinutes: Schema.optionalKey(Schema.Int),
+  maxConcurrentVms: Schema.optionalKey(Schema.Int),
 });
 
 export const SandboxState = Schema.Literals([

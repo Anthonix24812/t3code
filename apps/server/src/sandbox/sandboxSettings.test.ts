@@ -34,7 +34,12 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("sandbox settings
       yield* service.updateSettings({ sandbox: { idleMinutes: 5 } });
 
       const settings = yield* service.getSettings;
-      assert.deepEqual(settings.sandbox, { boatApiKey: key, size: "large", idleMinutes: 5 });
+      assert.deepEqual(settings.sandbox, {
+        boatApiKey: key,
+        size: "large",
+        idleMinutes: 5,
+        maxConcurrentVms: 4,
+      });
       assert.notInclude(yield* fs.readFileString(config.settingsPath), key);
       const forClient = ServerSettingsModule.redactServerSettingsForClient(settings, {
         secretReferences: true,

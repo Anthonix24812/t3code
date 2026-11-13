@@ -57,7 +57,11 @@ function fakeDriver(options: { failFirstCreate?: boolean } = {}) {
   return { driver, calls, names: () => calls.map((call) => call.name) };
 }
 
-function provide(fake: ReturnType<typeof fakeDriver>, shells: Map<ThreadId, unknown>) {
+function provide(
+  fake: ReturnType<typeof fakeDriver>,
+  shells: Map<ThreadId, unknown>,
+  maxConcurrentVms = 4,
+) {
   const orchestrator = {
     getThreadShell: (id: ThreadId) => Effect.succeed(shells.has(id) ? shells.get(id) : null),
     streamDomainEvents: Stream.empty,
@@ -68,7 +72,9 @@ function provide(fake: ReturnType<typeof fakeDriver>, shells: Map<ThreadId, unkn
         layerService.pipe(
           Layer.provide(Layer.succeed(Orchestrator.OrchestratorV2, orchestrator)),
           Layer.provide(
-            ServerSettingsService.layerTest({ sandbox: { boatApiKey: "boat_k", idleMinutes: 15 } }),
+            ServerSettingsService.layerTest({
+              sandbox: { boatApiKey: "boat_k", idleMinutes: 15, maxConcurrentVms },
+            }),
           ),
           Layer.provide(NodeSqliteClient.layer({ filename: ":memory:" })),
         ),
@@ -76,6 +82,7 @@ function provide(fake: ReturnType<typeof fakeDriver>, shells: Map<ThreadId, unkn
       Effect.provideService(SandboxDriverFactory, () => fake.driver),
       Effect.provideService(SandboxProjectReader, async () => ({
         bundle: new Uint8Array([1, 2, 3]),
+        patch: null,
         branch: "main",
         originUrl: "git@github.com:me/app.git",
         directoryName: "app",
@@ -85,7 +92,7 @@ function provide(fake: ReturnType<typeof fakeDriver>, shells: Map<ThreadId, unkn
     );
 }
 
-const liveShell = { archivedAt: null, deletedAt: null };
+const liveShell = { archivedAt: null, deletedAt: null, lineage: { rootThreadId: threadId } };
 
 describe("SandboxProvisioner", () => {
   it.effect("creates, bootstraps and connects one VM per thread, then reuses it", () => {
@@ -187,6 +194,33 @@ describe("SandboxProvisioner", () => {
       expect(yield* provisioner.isSandboxThread(other)).toBe(false);
       expect(yield* provisioner.isSandboxThread(ThreadId.make("missing"))).toBe(false);
     }).pipe(provide(fakeDriver(), shells));
+  });
+
+  it.effect("caps the VMs one thread tree runs at once", () => {
+    const root = ThreadId.make("root");
+    const [taskA, taskB, other] = ["task-a", "task-b", "other"].map((id) => ThreadId.make(id));
+    const inTree = (rootThreadId: ThreadId) => ({ ...liveShell, lineage: { rootThreadId } });
+    const shells = new Map<ThreadId, unknown>([
+      [root, inTree(root)],
+      [taskA!, inTree(root)],
+      [taskB!, inTree(root)],
+      [other!, inTree(other!)],
+    ]);
+    const fake = fakeDriver();
+    return Effect.gen(function* () {
+      const provisioner = yield* SandboxProvisioner;
+      const start = (threadId: ThreadId) =>
+        provisioner.ensureSession({ threadId, agent: "claude", hostCwd: "/Users/me/app" });
+      yield* start(root);
+      yield* start(taskA!);
+      expect(yield* provisioner.capacity(taskB!)).toEqual({ running: 2, limit: 2 });
+      const refused = yield* Effect.flip(start(taskB!));
+      expect(refused.message).toContain("already run 2 Boat VMs");
+      // Another tree has its own budget.
+      yield* start(other!);
+      yield* provisioner.stop(taskA!);
+      yield* start(taskB!);
+    }).pipe(provide(fake, shells, 2));
   });
 
   it.effect("destroys the VM of a thread that was deleted or archived", () => {

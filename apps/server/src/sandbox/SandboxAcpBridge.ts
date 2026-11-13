@@ -33,7 +33,29 @@ export interface AcpBridgeDeps {
   }) => Promise<RemoteConnection>;
   readonly writeHost: (line: string) => void;
   readonly onBusyChange: (busy: boolean) => void;
+  /** MCP servers the agent on the VM gets; they reach this machine through the relay tunnel. */
+  readonly remoteMcpServers?: ReadonlyArray<Record<string, unknown>>;
+  /** Answers one MCP message the VM sent through the tunnel. */
+  readonly onTunnel?: (frame: TunnelRequest) => Promise<TunnelReply>;
+  /** Runs before a turn's result reaches T3, so its checkpoint sees the VM's changes. */
+  readonly beforePromptResult?: () => Promise<void>;
 }
+
+export interface TunnelRequest {
+  readonly id: string;
+  readonly target: string;
+  readonly sessionId: string | null;
+  readonly protocolVersion: string | null;
+  readonly message: Record<string, unknown>;
+}
+
+export interface TunnelReply {
+  readonly sessionId?: string | null;
+  readonly messages: ReadonlyArray<unknown>;
+  readonly error?: string;
+}
+
+const TUNNEL_PREFIX = '{"t3Tunnel"';
 
 const isResponse = (message: JsonRpcMessage) =>
   message.method === undefined && message.id !== undefined && message.id !== null;
@@ -69,6 +91,8 @@ export class AcpBridgeSession {
   private readonly replaying = new Set<string>();
   private nextInternalId = 0;
   private queue: Promise<void> = Promise.resolve();
+  /** Keeps turn results in order while each waits for its mirror. */
+  private promptResults: Promise<void> = Promise.resolve();
   private busy = false;
 
   private readonly deps: AcpBridgeDeps;
@@ -134,7 +158,7 @@ export class AcpBridgeSession {
     if (method === "session/new" || method === "session/load" || method === "session/resume") {
       if (hostSessionId) this.hostCwd.set(hostSessionId, params.cwd);
       params.cwd = remote.remoteCwd;
-      params.mcpServers = [];
+      params.mcpServers = this.mcpServers();
       if (method !== "session/new" && hostSessionId) {
         if (!remote.loadSession) {
           await this.attachAsNewSession(remote, hostSessionId);
@@ -157,6 +181,10 @@ export class AcpBridgeSession {
   }
 
   private handleRemoteLine(remote: ActiveRemote, line: string) {
+    if (line.startsWith(TUNNEL_PREFIX)) {
+      this.answerTunnel(remote, line);
+      return;
+    }
     let message: JsonRpcMessage;
     try {
       message = JSON.parse(line) as JsonRpcMessage;
@@ -177,7 +205,17 @@ export class AcpBridgeSession {
         const sessionId = (message.result as { sessionId?: unknown }).sessionId;
         if (typeof sessionId === "string") remote.sessions.add(sessionId);
       }
-      if (request?.method === "session/prompt") this.updateBusy();
+      if (request?.method === "session/prompt") {
+        const before = this.deps.beforePromptResult?.() ?? Promise.resolve();
+        this.promptResults = this.promptResults
+          .then(() => before)
+          .catch(() => undefined)
+          .then(() => {
+            this.deps.writeHost(line);
+            this.updateBusy();
+          });
+        return;
+      }
       this.deps.writeHost(line);
       return;
     }
@@ -253,7 +291,7 @@ export class AcpBridgeSession {
       const loaded = await this.request(remote, "session/load", {
         sessionId: remoteSessionId,
         cwd: remote.remoteCwd,
-        mcpServers: [],
+        mcpServers: this.mcpServers(),
       });
       if (loaded.error) throw new Error(loaded.error.message);
       remote.sessions.add(remoteSessionId);
@@ -265,7 +303,7 @@ export class AcpBridgeSession {
   private async attachAsNewSession(remote: ActiveRemote, hostSessionId: string) {
     const created = await this.request(remote, "session/new", {
       cwd: remote.remoteCwd,
-      mcpServers: [],
+      mcpServers: this.mcpServers(),
     });
     const remoteSessionId = (created.result as { sessionId?: unknown } | undefined)?.sessionId;
     if (typeof remoteSessionId !== "string") {
@@ -274,6 +312,28 @@ export class AcpBridgeSession {
     this.hostToRemote.set(hostSessionId, remoteSessionId);
     this.remoteToHost.set(remoteSessionId, hostSessionId);
     remote.sessions.add(remoteSessionId);
+  }
+
+  private mcpServers() {
+    return [...(this.deps.remoteMcpServers ?? [])];
+  }
+
+  private answerTunnel(remote: ActiveRemote, line: string) {
+    let frame: TunnelRequest;
+    try {
+      frame = JSON.parse(line) as TunnelRequest;
+    } catch {
+      return;
+    }
+    const reply = this.deps.onTunnel
+      ? this.deps.onTunnel(frame).catch((error: unknown) => ({
+          messages: [],
+          error: error instanceof Error ? error.message : String(error),
+        }))
+      : Promise.resolve({ messages: [], error: "No MCP tools are available for this sandbox." });
+    void reply.then((answer) =>
+      remote.channel.send(JSON.stringify({ t3Tunnel: "response", id: frame.id, ...answer })),
+    );
   }
 
   private toRemote(hostSessionId: string) {
@@ -306,7 +366,7 @@ export class AcpBridgeSession {
 
   /** Resolves once every host message received so far has been handled. */
   settled() {
-    return this.queue;
+    return Promise.all([this.queue, this.promptResults]).then(() => undefined);
   }
 
   /** Called when the host side goes away: the agent process on the VM ends with it. */
@@ -321,6 +381,7 @@ export interface BridgeHello {
   readonly agent: string;
   readonly threadId: string | null;
   readonly env: Record<string, string>;
+  readonly mcp?: { readonly endpoint: string; readonly authorization: string } | null;
 }
 
 /** Splits a byte stream into lines without losing a line split across chunks. */

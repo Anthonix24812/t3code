@@ -40,13 +40,18 @@ import { createBoatClient } from "./providers/boatApi.ts";
 import { createBoatDriver } from "./providers/boat.ts";
 import { makeSandboxRecords, toSandboxRecord, type SandboxRow } from "./SandboxRecords.ts";
 import type { SandboxDriver } from "./SandboxProvider.ts";
+import { execOrThrow } from "./SandboxProvider.ts";
+import { headCommit, mirrorPatch, readProjectSource } from "./sandboxGit.ts";
 import {
+  SANDBOX_MCP_STDIO_PATH,
   SANDBOX_RELAY_PORT,
   bootstrapSandbox,
   remoteProjectPath,
   startSandboxSession,
+  vmWorkingTreePatchScript,
   type SandboxProjectSource,
 } from "./sandboxSetup.ts";
+import { forwardToT3Mcp, handleSandboxMcp } from "./sandboxTunnel.ts";
 
 const execFileAsync = NodeUtil.promisify(NodeChildProcess.execFile);
 const decodeSandboxAgent = Schema.decodeUnknownOption(SandboxAgent);
@@ -91,6 +96,12 @@ export class SandboxProvisioner extends Context.Service<
     readonly stop: (threadId: ThreadId) => Effect.Effect<void, SandboxError>;
     readonly destroy: (threadId: ThreadId) => Effect.Effect<void, SandboxError>;
     readonly sweep: Effect.Effect<void>;
+    /** Boat VMs running in this thread's tree (its root and every task under it), and the cap. */
+    readonly capacity: (
+      threadId: ThreadId,
+    ) => Effect.Effect<{ readonly running: number; readonly limit: number }, SandboxError>;
+    /** Copies the VM's working tree into the thread's host worktree, for checkpoints and diffs. */
+    readonly mirror: (threadId: ThreadId, hostCwd: string) => Effect.Effect<void>;
   }
 >()("t3/sandbox/SandboxProvisioner") {}
 
@@ -162,6 +173,72 @@ const make = Effect.gen(function* () {
       for (const bridge of bridges.get(threadId) ?? []) bridge.dispose();
     });
 
+  const rootOf = (threadId: ThreadId) =>
+    orchestrator.getThreadShell(threadId).pipe(
+      Effect.map((shell) => shell?.lineage.rootThreadId ?? threadId),
+      Effect.orElseSucceed(() => threadId),
+    );
+
+  const capacity = Effect.fn("SandboxProvisioner.capacity")(function* (threadId: ThreadId) {
+    const settings = yield* sandboxSettings;
+    const root = yield* rootOf(threadId);
+    const rows = yield* records.list.pipe(
+      Effect.mapError(toSandboxError("Could not list sandboxes")),
+    );
+    let running = 0;
+    for (const row of rows) {
+      if (row.threadId === threadId) continue;
+      if (row.state !== "running" && row.state !== "provisioning") continue;
+      if ((yield* rootOf(row.threadId)) === root) running += 1;
+    }
+    return { running, limit: settings.maxConcurrentVms };
+  });
+
+  // Tasks an agent splits off each get a VM, so a runaway tree must stop at the cap, not the bill.
+  const assertCapacity = Effect.fn("SandboxProvisioner.assertCapacity")(function* (
+    threadId: ThreadId,
+  ) {
+    const { running, limit } = yield* capacity(threadId);
+    if (running >= limit) {
+      return yield* new SandboxError({
+        message: `This thread and its tasks already run ${running} Boat VMs, the most allowed at once (${limit}). Wait for a task to finish, or raise the limit in Settings → Environments → Boat sandbox.`,
+      });
+    }
+  });
+
+  const mirror = Effect.fn("SandboxProvisioner.mirror")(
+    function* (threadId: ThreadId, hostCwd: string) {
+      const shell = yield* orchestrator.getThreadShell(threadId);
+      // Only a T3 worktree mirrors a VM; a project root holds the user's own edits.
+      if (
+        !shell?.worktreePath ||
+        NodePath.resolve(shell.worktreePath) !== NodePath.resolve(hostCwd)
+      ) {
+        return;
+      }
+      const endpoint = live.get(threadId);
+      const row = yield* records.get(threadId);
+      if (!endpoint || !row?.boatSandboxId) return;
+      const driver = yield* driverFor(yield* sandboxSettings);
+      const base = yield* call("Could not read the worktree's commit", () => headCommit(hostCwd));
+      const patch = yield* call("Could not read the VM's changes", () =>
+        execOrThrow(
+          driver,
+          row.boatSandboxId!,
+          { script: vmWorkingTreePatchScript(endpoint.remoteCwd, base), timeoutMs: 120_000 },
+          "Reading the VM's changes",
+        ),
+      );
+      yield* call("Could not mirror the VM's changes", () =>
+        mirrorPatch(hostCwd, base, Buffer.from(patch)),
+      );
+    },
+    (effect) =>
+      effect.pipe(
+        Effect.catchCause((cause) => Effect.logWarning("sandbox mirror failed", { cause })),
+      ),
+  );
+
   const provision = Effect.fn("SandboxProvisioner.provision")(function* (input: {
     readonly threadId: ThreadId;
     readonly agent: SandboxAgent;
@@ -203,6 +280,7 @@ const make = Effect.gen(function* () {
             idempotencyKey: NodeCrypto.randomUUID(),
           };
         } else if (status === "stopped" || status === "stopping" || status === "failed") {
+          yield* assertCapacity(input.threadId);
           row = { ...row, state: "provisioning", error: null };
           yield* save(row);
           yield* call("Could not resume the VM", () =>
@@ -213,6 +291,7 @@ const make = Effect.gen(function* () {
         }
       }
       if (row.boatSandboxId === null) {
+        yield* assertCapacity(input.threadId);
         yield* save(row);
         const limits = yield* call("Could not read boat.dev limits", () => driver.limits());
         if (limits?.canStart === false) {
@@ -374,6 +453,8 @@ const make = Effect.gen(function* () {
 
   return SandboxProvisioner.of({
     list,
+    capacity,
+    mirror,
     isSandboxThread,
     ensureSession,
     setBusy,
@@ -480,6 +561,25 @@ const start = Effect.gen(function* () {
         onBusyChange: (isBusy) => {
           if (threadId) void runPromise(provisioner.setBusy(threadId, isBusy));
         },
+        remoteMcpServers: [
+          ...(hello.mcp ? [stdioTunnelServer("t3", "t3")] : []),
+          stdioTunnelServer("t3-sandbox", "sandbox"),
+        ],
+        onTunnel: (frame) => {
+          if (frame.target === "t3") {
+            return hello.mcp
+              ? forwardToT3Mcp(hello.mcp, frame)
+              : Promise.resolve({ messages: [], error: "This thread has no T3 tools." });
+          }
+          return handleSandboxMcp(frame, {
+            createIssue: (input) => createGithubIssue(hostCwd, input),
+            capacity: () => runPromise(provisioner.capacity(threadId!)),
+          });
+        },
+        beforePromptResult: () =>
+          threadId && hostCwd
+            ? runPromise(provisioner.mirror(threadId, hostCwd))
+            : Promise.resolve(),
         connect: async (handlers) => {
           const endpoint = await runPromise(
             provisioner.ensureSession({ threadId: threadId!, agent: agent.value, hostCwd }),
@@ -609,33 +709,31 @@ async function connectRelayWebSocket(input: {
   return { send: (line: string) => socket.send(line), close: () => socket.close() };
 }
 
-const git = async (cwd: string, args: ReadonlyArray<string>) =>
-  (await execFileAsync("git", ["-C", cwd, ...args], { maxBuffer: 1024 * 1024 })).stdout.trim();
-const gitOrNull = (cwd: string, args: ReadonlyArray<string>) =>
-  git(cwd, args).then(
-    (value) => value || null,
-    () => null,
-  );
+/** An MCP server entry for the agent on the VM; `mcp-stdio.mjs` forwards it through the tunnel. */
+const stdioTunnelServer = (name: string, target: string) => ({
+  name,
+  command: "node",
+  args: [SANDBOX_MCP_STDIO_PATH, target],
+  env: [],
+});
 
-/** Committed history of the current branch; uncommitted changes stay on this machine. */
-async function readProjectSource(hostCwd: string): Promise<SandboxProjectSource> {
-  const root = await git(hostCwd, ["rev-parse", "--show-toplevel"]).catch(() => {
-    throw new Error("Boat sandboxes need a project that is a git repository with a commit.");
-  });
-  const branch = await gitOrNull(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
-  const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-sandbox-bundle-"));
-  try {
-    const bundlePath = NodePath.join(directory, "project.bundle");
-    await git(root, ["bundle", "create", bundlePath, "HEAD", ...(branch ? [branch] : [])]);
-    return {
-      bundle: await NodeFSP.readFile(bundlePath),
-      branch,
-      originUrl: await gitOrNull(root, ["remote", "get-url", "origin"]),
-      directoryName: NodePath.basename(root).replace(/[^A-Za-z0-9._-]/g, "-") || "project",
-      gitUserName: await gitOrNull(root, ["config", "user.name"]),
-      gitUserEmail: await gitOrNull(root, ["config", "user.email"]),
-    };
-  } finally {
-    await NodeFSP.rm(directory, { recursive: true, force: true });
-  }
+/** Opened here with this machine's GitHub login, which never goes to the VM. */
+async function createGithubIssue(
+  hostCwd: string,
+  input: { readonly title: string; readonly body: string; readonly labels: ReadonlyArray<string> },
+) {
+  const { stdout } = await execFileAsync(
+    "gh",
+    [
+      "issue",
+      "create",
+      "--title",
+      input.title,
+      "--body",
+      input.body,
+      ...input.labels.flatMap((label) => ["--label", label]),
+    ],
+    { cwd: hostCwd, timeout: 60_000 },
+  );
+  return stdout.trim().split("\n").at(-1) ?? "";
 }

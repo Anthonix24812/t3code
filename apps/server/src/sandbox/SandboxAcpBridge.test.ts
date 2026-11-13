@@ -6,7 +6,11 @@ import { forwardedSandboxEnv } from "./sandboxAcpPipe.ts";
 type Message = Record<string, any>;
 
 /** A scripted remote ACP agent: answers internal and forwarded requests from `respond`. */
-function harness(options: { loadSession: boolean; probe?: boolean }) {
+function harness(options: {
+  loadSession: boolean;
+  probe?: boolean;
+  beforePromptResult?: () => Promise<void>;
+}) {
   const host: Message[] = [];
   const remoteReceived: Message[] = [];
   const busy: boolean[] = [];
@@ -35,6 +39,9 @@ function harness(options: { loadSession: boolean; probe?: boolean }) {
     {
       writeHost: (line) => host.push(JSON.parse(line)),
       onBusyChange: (value) => busy.push(value),
+      remoteMcpServers: [{ name: "t3", command: "node", args: ["mcp-stdio.mjs", "t3"], env: [] }],
+      onTunnel: async (frame) => ({ messages: [{ echo: frame.message }], sessionId: "s-1" }),
+      ...(options.beforePromptResult ? { beforePromptResult: options.beforePromptResult } : {}),
       connect: async (handlers) => {
         connects += 1;
         remote = handlers;
@@ -66,6 +73,10 @@ function harness(options: { loadSession: boolean; probe?: boolean }) {
     fromRemote: (message: Message) =>
       remote!.onMessage(JSON.stringify({ jsonrpc: "2.0", ...message })),
     closeRemote: () => remote!.onClose(),
+    fromRemoteRaw: (line: string) => remote!.onMessage(line),
+    settledTunnel: () =>
+      new Promise<void>((resolve) => queueMicrotask(() => queueMicrotask(resolve))),
+    settled: () => session.settled(),
   };
 }
 
@@ -99,7 +110,10 @@ describe("AcpBridgeSession", () => {
       fs: { readTextFile: false, writeTextFile: false },
       terminal: false,
     });
-    expect(created!.params).toEqual({ cwd: "/home/user/work/app", mcpServers: [] });
+    expect(created!.params).toEqual({
+      cwd: "/home/user/work/app",
+      mcpServers: [{ name: "t3", command: "node", args: ["mcp-stdio.mjs", "t3"], env: [] }],
+    });
     expect(bridge.host.at(-1)).toMatchObject({ id: 2, result: { sessionId: "remote-0" } });
   });
 
@@ -129,6 +143,7 @@ describe("AcpBridgeSession", () => {
     expect(bridge.remoteReceived.at(-1)).toMatchObject({ id: "perm-1", result: { outcome: {} } });
 
     bridge.fromRemote({ id: 2, result: { stopReason: "end_turn" } });
+    await bridge.settled();
     expect(bridge.busy).toEqual([true, false]);
     expect(bridge.host.at(-1)).toMatchObject({ id: 2, result: { stopReason: "end_turn" } });
   });
@@ -173,6 +188,43 @@ describe("AcpBridgeSession", () => {
     });
     bridge.fromRemote({ method: "session/update", params: { sessionId: "remote-1", update: {} } });
     expect(bridge.host.at(-1)).toMatchObject({ params: { sessionId: "remote-0" } });
+  });
+
+  it("answers MCP tunnel frames from the VM without passing them to T3", async () => {
+    const bridge = harness({ loadSession: true });
+    await bridge.send({ id: 1, method: "session/new", params: { cwd: "/h", mcpServers: [] } });
+    const hostBefore = bridge.host.length;
+    bridge.fromRemoteRaw(
+      JSON.stringify({ t3Tunnel: "request", id: "t-1", target: "t3", message: { id: 5 } }),
+    );
+    await bridge.settledTunnel();
+    expect(bridge.host.length).toBe(hostBefore);
+    expect(bridge.remoteReceived.at(-1)).toEqual({
+      t3Tunnel: "response",
+      id: "t-1",
+      messages: [{ echo: { id: 5 } }],
+      sessionId: "s-1",
+    });
+  });
+
+  it("holds a turn's result until the VM's changes are mirrored", async () => {
+    let release = () => undefined as void;
+    const mirrored = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const bridge = harness({ loadSession: true, beforePromptResult: () => mirrored });
+    await bridge.send({ id: 1, method: "session/new", params: { cwd: "/h", mcpServers: [] } });
+    await bridge.send({
+      id: 2,
+      method: "session/prompt",
+      params: { sessionId: "remote-0", prompt: [] },
+    });
+    bridge.fromRemote({ id: 2, result: { stopReason: "end_turn" } });
+    expect(bridge.host.some((message) => message.id === 2)).toBe(false);
+    release();
+    await bridge.settled();
+    expect(bridge.host.at(-1)).toMatchObject({ id: 2, result: { stopReason: "end_turn" } });
+    expect(bridge.busy).toEqual([true, false]);
   });
 
   it("does not start a VM for a cancel while disconnected", async () => {

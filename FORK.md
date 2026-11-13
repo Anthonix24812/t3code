@@ -16,9 +16,9 @@ releases. Never point it at `pingdotgg/t3code`.
 2. In a new thread's composer, choose **Run on → Boat sandbox**. That switches the thread to the
    Boat provider of the same agent family (Claude, Codex or Gemini). You can also pick
    "Claude · Boat sandbox" (or Codex/Gemini) in the provider picker.
-3. The first message creates the VM, installs the tools, clones the project's committed history
-   (current branch, from a git bundle) to `/home/user/work/<name>`, and runs the agent there.
-   Uncommitted changes stay on this machine.
+3. The first message creates the VM, installs the tools, clones the current branch from a git
+   bundle to `/home/user/work/<name>`, applies your uncommitted changes (untracked files included,
+   ignored files left out) as a patch, and runs the agent there.
 
 Agents on the VM get no credentials from this machine unless you opt in: on the Boat provider
 instance in Settings → Providers, add environment variables named `T3_SANDBOX_ENV_<NAME>`, for
@@ -32,14 +32,27 @@ The thread stays a normal thread on this server, so the phone and other clients 
 stops after the idle window and resumes from its snapshot on the next message. Archiving or
 deleting the thread deletes the VM, and Settings lists every VM with Stop and Delete.
 
+Diffs and checkpoints: Run on → Boat sandbox also picks a new worktree. After every turn the
+server copies the VM's working tree into that worktree before the turn ends, so T3's checkpoints,
+diffs and pull request actions see the agent's work. Only a T3 worktree is mirrored. A thread
+running in the project root keeps your checkout untouched and its diffs stay empty.
+
+Tasks: the agent on the VM gets T3's own tools through the relay, plus `github_issue_create` and
+`sandbox_capacity`. `delegate_task` with `isolation: "worktree"` and a Boat provider starts a task
+thread with its own worktree, branch and VM. That task can split off more tasks. Pull requests
+and issues are opened on this machine with your GitHub login, which never goes to a VM. The
+thread-scoped T3 credential never goes there either: the server adds it to each tunneled call.
+A thread tree runs at most 4 VMs at once (Settings → Environments → Boat sandbox → VMs per thread
+tree).
+
 How it works: the Boat provider instances are local ACP agents whose command is
 `t3 __sandbox-acp <agent>`. That process pipes ACP to this server
 ([`SandboxAcpBridge.ts`](apps/server/src/sandbox/SandboxAcpBridge.ts)), which provisions the VM
 ([`SandboxProvisioner.ts`](apps/server/src/sandbox/SandboxProvisioner.ts)) and relays ACP over a
 WebSocket to the agent on the VM. The Boat driver is ported from dum-e
-([`providers/boat.ts`](apps/server/src/sandbox/providers/boat.ts)). Turn checkpoints and diffs
-read this machine's checkout, which the agent does not change. They stay empty for sandbox
-threads, while tool calls still show their edits.
+([`providers/boat.ts`](apps/server/src/sandbox/providers/boat.ts)). The same WebSocket carries
+the agent's MCP calls back here
+([`sandboxTunnel.ts`](apps/server/src/sandbox/sandboxTunnel.ts)).
 
 ## Syncing with upstream
 

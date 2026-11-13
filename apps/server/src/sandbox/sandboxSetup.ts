@@ -164,20 +164,23 @@ const installToolsScript = () =>
 
 /**
  * Runs on the VM. It accepts one WebSocket per ACP session, checks the token the host wrote to a
- * private file, starts the requested agent with the env the host forwards, and relays
- * newline-delimited JSON-RPC both ways. Credentials only travel inside the TLS stream, never in a
- * command or a file on the snapshotted disk.
+ * private file, starts the requested agent, and relays newline-delimited JSON-RPC both ways. It
+ * also tunnels the agent's MCP calls to the host on 127.0.0.1, so the host adds its own credential
+ * and none reaches the VM.
  */
 const SANDBOX_RELAY_SOURCE = String.raw`
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { createInterface } from "node:readline";
 import { createRequire } from "node:module";
 
 const { WebSocketServer } = createRequire(process.env.TOOLS_DIRECTORY + "/")("ws");
 const agents = JSON.parse(process.env.AGENT_COMMANDS);
+const tunnelPort = Number(process.env.TUNNEL_PORT);
+const sockets = new Map();
+const pending = new Map();
 const server = createServer((request, response) => {
   response.writeHead(request.url === "/healthz" ? 200 : 404).end(request.url === "/healthz" ? "ok" : "");
 });
@@ -193,13 +196,15 @@ const tokenMatches = (token) => {
 };
 wss.on("connection", (socket) => {
   let child = null;
+  const key = randomUUID();
   socket.once("message", (data) => {
     let hello;
     try { hello = JSON.parse(String(data)); } catch { return socket.close(4400, "bad hello"); }
     if (!tokenMatches(hello.token)) return socket.close(4401, "unauthorized");
     const command = agents[hello.agent];
     if (!command) return socket.close(4404, "unknown agent");
-    const env = { ...process.env, ...hello.env };
+    sockets.set(key, socket);
+    const env = { ...process.env, ...hello.env, T3_SANDBOX_TUNNEL_URL: "http://127.0.0.1:" + tunnelPort + "/" + key };
     delete env.TOKEN_PATH;
     delete env.AGENT_COMMANDS;
     child = spawn(command[0], command.slice(1), {
@@ -212,13 +217,76 @@ wss.on("connection", (socket) => {
     });
     child.on("exit", (code) => socket.close(code === 0 ? 1000 : 4500, "agent exited"));
     child.on("error", () => socket.close(4500, "agent failed to start"));
-    socket.on("message", (message) => child.stdin.write(String(message) + "\n"));
+    socket.on("message", (message) => {
+      const text = String(message);
+      if (text.startsWith('{"t3Tunnel"')) {
+        const frame = JSON.parse(text);
+        pending.get(frame.id)?.(frame);
+        pending.delete(frame.id);
+        return;
+      }
+      child.stdin.write(text + "\n");
+    });
     socket.send(JSON.stringify({ t3SandboxRelay: "ready" }));
   });
-  socket.on("close", () => child?.kill("SIGTERM"));
+  socket.on("close", () => {
+    sockets.delete(key);
+    child?.kill("SIGTERM");
+  });
 });
 server.listen(Number(process.env.RELAY_PORT), "0.0.0.0");
+
+// POST /<session key>/<target> {sessionId, protocolVersion, message} -> {sessionId, messages, error}
+createServer(async (request, response) => {
+  const [, key, target] = (request.url ?? "").split("/");
+  const socket = sockets.get(key);
+  if (request.method !== "POST" || !socket || !target) return response.writeHead(404).end();
+  let body = "";
+  for await (const chunk of request) body += chunk;
+  const id = randomUUID();
+  const reply = await new Promise((resolve) => {
+    pending.set(id, resolve);
+    socket.send(JSON.stringify({ t3Tunnel: "request", id, target, ...JSON.parse(body) }));
+  });
+  response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(reply));
+}).listen(tunnelPort, "127.0.0.1");
 `;
+
+/** A stdio MCP server for agents on the VM; it forwards every message through the relay tunnel. */
+const SANDBOX_MCP_STDIO_SOURCE = String.raw`
+import { createInterface } from "node:readline";
+
+const url = process.env.T3_SANDBOX_TUNNEL_URL + "/" + process.argv[2];
+let sessionId = null;
+let protocolVersion = null;
+createInterface({ input: process.stdin }).on("line", async (line) => {
+  if (!line.trim()) return;
+  const message = JSON.parse(line);
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, protocolVersion, message }),
+    });
+    const reply = await response.json();
+    sessionId = reply.sessionId ?? sessionId;
+    for (const out of reply.messages ?? []) {
+      if (message.method === "initialize" && out.result?.protocolVersion) protocolVersion = out.result.protocolVersion;
+      process.stdout.write(JSON.stringify(out) + "\n");
+    }
+    if (reply.error && message.id !== undefined) {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: reply.error } }) + "\n");
+    }
+  } catch (error) {
+    if (message.id !== undefined) {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: String(error) } }) + "\n");
+    }
+  }
+});
+`;
+
+const SANDBOX_TUNNEL_PORT = 4_711;
+export const SANDBOX_MCP_STDIO_PATH = `${TOOLS_DIRECTORY}/mcp-stdio.mjs`;
 
 const startRelayScript = () =>
   [
@@ -227,6 +295,7 @@ const startRelayScript = () =>
       TOKEN_PATH: SANDBOX_RELAY_TOKEN_PATH,
       RELAY_PORT: String(SANDBOX_RELAY_PORT),
       AGENT_COMMANDS: JSON.stringify(SANDBOX_AGENT_COMMANDS),
+      TUNNEL_PORT: String(SANDBOX_TUNNEL_PORT),
     }),
     `exec node ${TOOLS_DIRECTORY}/relay.mjs >>/tmp/t3-sandbox-relay.log 2>&1`,
   ].join("\n");
@@ -243,6 +312,8 @@ const relayHealthScript = () =>
 
 export interface SandboxProjectSource {
   readonly bundle: Uint8Array;
+  /** Uncommitted changes, untracked files included, applied once on top of the clone. */
+  readonly patch: Uint8Array | null;
   readonly branch: string | null;
   readonly originUrl: string | null;
   readonly directoryName: string;
@@ -253,7 +324,11 @@ export interface SandboxProjectSource {
 export const remoteProjectPath = (directoryName: string) =>
   `${SANDBOX_WORK_DIRECTORY}/${directoryName}`;
 
-const cloneProjectScript = (source: SandboxProjectSource, bundlePath: string) => {
+const cloneProjectScript = (
+  source: SandboxProjectSource,
+  bundlePath: string,
+  patchPath: string | null,
+) => {
   const target = remoteProjectPath(source.directoryName);
   return [
     "set -eu",
@@ -263,8 +338,13 @@ const cloneProjectScript = (source: SandboxProjectSource, bundlePath: string) =>
     source.originUrl
       ? `  git -C ${shellQuote(target)} remote set-url origin ${shellQuote(source.originUrl)}`
       : `  git -C ${shellQuote(target)} remote remove origin`,
+    ...(patchPath
+      ? [
+          `  git -C ${shellQuote(target)} apply --binary --whitespace=nowarn ${shellQuote(patchPath)}`,
+        ]
+      : []),
     "fi",
-    `rm -f ${shellQuote(bundlePath)}`,
+    `rm -f ${shellQuote(bundlePath)}${patchPath ? ` ${shellQuote(patchPath)}` : ""}`,
     ...(source.gitUserName
       ? [`git config --global user.name ${shellQuote(source.gitUserName)}`]
       : []),
@@ -278,6 +358,12 @@ const cloneProjectScript = (source: SandboxProjectSource, bundlePath: string) =>
 export async function startSandboxSession(driver: SandboxDriver, id: string, relayToken: string) {
   await execOrThrow(driver, id, { script: prepareSystemScript(), sudo: true }, "Preparing the VM");
   await driver.writeFile(id, { path: SANDBOX_RELAY_TOKEN_PATH, content: relayToken, mode: 0o600 });
+  // Rewritten every session so a VM made by an older build runs the current relay.
+  await driver.writeFile(id, {
+    path: `${TOOLS_DIRECTORY}/relay.mjs`,
+    content: SANDBOX_RELAY_SOURCE,
+  });
+  await driver.writeFile(id, { path: SANDBOX_MCP_STDIO_PATH, content: SANDBOX_MCP_STDIO_SOURCE });
   await driver.startDetached(id, { script: startRelayScript() });
   await execOrThrow(driver, id, { script: relayHealthScript() }, "Starting the sandbox relay");
 }
@@ -295,16 +381,31 @@ export async function bootstrapSandbox(
     { script: installToolsScript(), sudo: true, timeoutMs: SETUP_TIMEOUT_MS },
     "Installing agent tools",
   );
-  await driver.writeFile(id, {
-    path: `${TOOLS_DIRECTORY}/relay.mjs`,
-    content: SANDBOX_RELAY_SOURCE,
-  });
   const bundlePath = `${BOAT_PRIVATE_DIRECTORY}/project.bundle`;
   await driver.writeFile(id, { path: bundlePath, content: source.bundle, mode: 0o600 });
+  const patchPath = source.patch ? `${BOAT_PRIVATE_DIRECTORY}/project.patch` : null;
+  if (patchPath && source.patch) {
+    await driver.writeFile(id, { path: patchPath, content: source.patch, mode: 0o600 });
+  }
   await execOrThrow(
     driver,
     id,
-    { script: cloneProjectScript(source, bundlePath), timeoutMs: SETUP_TIMEOUT_MS },
+    { script: cloneProjectScript(source, bundlePath, patchPath), timeoutMs: SETUP_TIMEOUT_MS },
     "Cloning the project",
   );
 }
+
+/**
+ * Everything the agent changed on the VM since `base`, untracked files included, as a binary
+ * patch on stdout. A throwaway index leaves the agent's own staging alone.
+ */
+export const vmWorkingTreePatchScript = (remoteCwd: string, base: string) =>
+  [
+    "set -eu",
+    `cd ${shellQuote(remoteCwd)}`,
+    'index="$(mktemp)"',
+    "trap 'rm -f \"$index\"' EXIT",
+    `GIT_INDEX_FILE="$index" git read-tree ${shellQuote(base)}`,
+    'GIT_INDEX_FILE="$index" git add --all',
+    `GIT_INDEX_FILE="$index" git diff --cached --binary ${shellQuote(base)}`,
+  ].join("\n");

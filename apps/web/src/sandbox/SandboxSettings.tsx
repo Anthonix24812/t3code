@@ -1,5 +1,6 @@
 import {
   DEFAULT_SANDBOX_IDLE_MINUTES,
+  DEFAULT_SANDBOX_MAX_CONCURRENT_VMS,
   SANDBOX_AGENT_LABELS,
   type EnvironmentId,
   type SandboxSize,
@@ -102,6 +103,31 @@ export function SandboxSettings({ environmentId }: { readonly environmentId: Env
                     Number.isInteger(minutes) && minutes >= 0
                       ? Math.min(minutes, 24 * 60)
                       : DEFAULT_SANDBOX_IDLE_MINUTES,
+                },
+              });
+            }}
+          />
+        }
+      />
+      <SettingsRow
+        title="VMs per thread tree"
+        description="The most Boat VMs a thread and the tasks it splits off may run at once."
+        control={
+          <DraftInput
+            className="w-20"
+            type="number"
+            min={1}
+            max={20}
+            value={String(sandbox.maxConcurrentVms)}
+            aria-label="VMs per thread tree"
+            onCommit={(next) => {
+              const limit = Number.parseInt(next, 10);
+              updateSettings({
+                sandbox: {
+                  maxConcurrentVms:
+                    Number.isInteger(limit) && limit >= 1
+                      ? Math.min(limit, 20)
+                      : DEFAULT_SANDBOX_MAX_CONCURRENT_VMS,
                 },
               });
             }}

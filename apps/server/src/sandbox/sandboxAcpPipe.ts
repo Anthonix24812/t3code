@@ -45,6 +45,14 @@ export async function runSandboxAcpPipe(args: ReadonlyArray<string>): Promise<vo
       // Absent for the provider probe, which must never start a VM.
       threadId: process.env.T3CODE_THREAD_ID ?? null,
       env: forwardedSandboxEnv(process.env),
+      // This thread's T3 MCP session. It stays on this machine: the server calls it for the VM.
+      mcp:
+        process.env.T3_ACP_MCP_ENDPOINT && process.env.T3_ACP_MCP_AUTHORIZATION
+          ? {
+              endpoint: process.env.T3_ACP_MCP_ENDPOINT,
+              authorization: process.env.T3_ACP_MCP_AUTHORIZATION,
+            }
+          : null,
     })}\n`,
   );
   process.stdin.pipe(socket);
