@@ -2,26 +2,17 @@
 import * as NodeFS from "node:fs";
 import * as NodeNet from "node:net";
 
-/** Credentials an agent on the VM may need, read from this process's env when present. */
-const FORWARDED_ENV = [
-  "ANTHROPIC_API_KEY",
-  "ANTHROPIC_BASE_URL",
-  "CLAUDE_CODE_OAUTH_TOKEN",
-  "OPENAI_API_KEY",
-  "OPENAI_BASE_URL",
-  "CODEX_API_KEY",
-  "GEMINI_API_KEY",
-  "GOOGLE_API_KEY",
-];
-/** Any other variable to pass, set on the provider instance as `T3_SANDBOX_ENV_<NAME>`. */
+/**
+ * Only variables the user set on the Boat provider instance as `T3_SANDBOX_ENV_<NAME>` reach the
+ * VM. This process also inherits the server's env, whose own API keys must not leave the machine.
+ */
 const FORWARDED_ENV_PREFIX = "T3_SANDBOX_ENV_";
 
 export function forwardedSandboxEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   const forwarded: Record<string, string> = {};
   for (const [name, value] of Object.entries(env)) {
     if (!value) continue;
-    if (FORWARDED_ENV.includes(name)) forwarded[name] = value;
-    else if (name.startsWith(FORWARDED_ENV_PREFIX) && name.length > FORWARDED_ENV_PREFIX.length) {
+    if (name.startsWith(FORWARDED_ENV_PREFIX) && name.length > FORWARDED_ENV_PREFIX.length) {
       forwarded[name.slice(FORWARDED_ENV_PREFIX.length)] = value;
     }
   }

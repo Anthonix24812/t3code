@@ -57,6 +57,10 @@ export function SandboxSettings({ environmentId }: { readonly environmentId: Env
         }
       />
       <SettingsRow
+        title="Agent credentials"
+        description="Agents on a VM get none of this machine's logins or keys. Add T3_SANDBOX_ENV_ANTHROPIC_API_KEY (or OPENAI_, GEMINI_…) to a Boat provider's environment in Settings → Providers."
+      />
+      <SettingsRow
         title="VM size"
         description="Applies to new VMs, and to stopped ones when they resume."
         control={

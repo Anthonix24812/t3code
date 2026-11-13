@@ -20,11 +20,13 @@ releases. Never point it at `pingdotgg/t3code`.
    (current branch, from a git bundle) to `/home/user/work/<name>`, and runs the agent there.
    Uncommitted changes stay on this machine.
 
-Agents on the VM get credentials only from the provider instance's environment, never from your
-local CLI logins: set `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY`,
-`CODEX_API_KEY` or `GEMINI_API_KEY` on the Boat provider instance in Settings → Providers. Any
-other variable can be passed as `T3_SANDBOX_ENV_<NAME>`. These values travel inside the TLS
-connection to the VM's relay and never appear in a command or on the VM's snapshotted disk.
+Agents on the VM get no credentials from this machine unless you opt in: on the Boat provider
+instance in Settings → Providers, add environment variables named `T3_SANDBOX_ENV_<NAME>`, for
+example `T3_SANDBOX_ENV_ANTHROPIC_API_KEY`, `T3_SANDBOX_ENV_CLAUDE_CODE_OAUTH_TOKEN`,
+`T3_SANDBOX_ENV_OPENAI_API_KEY` or `T3_SANDBOX_ENV_GEMINI_API_KEY`. The agent sees them without
+the prefix. Your local CLI logins and the server's own env stay here. The values travel inside
+the TLS connection to the VM's relay and never appear in a command or on the VM's snapshotted
+disk.
 
 The thread stays a normal thread on this server, so the phone and other clients see it. A VM
 stops after the idle window and resumes from its snapshot on the next message. Archiving or

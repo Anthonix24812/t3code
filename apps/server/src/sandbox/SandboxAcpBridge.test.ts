@@ -192,15 +192,16 @@ describe("bridge plumbing", () => {
     expect(lines).toEqual(['{"a":1}', '{"b":2}']);
   });
 
-  it("forwards only agent credentials and explicitly prefixed variables", () => {
+  it("forwards only variables set for the sandbox, never the server's own keys", () => {
     expect(
       forwardedSandboxEnv({
-        ANTHROPIC_API_KEY: "a",
+        ANTHROPIC_API_KEY: "host-key",
         HOME: "/Users/me",
+        T3_SANDBOX_ENV_ANTHROPIC_API_KEY: "sandbox-key",
         T3_SANDBOX_ENV_GH_TOKEN: "g",
         T3_SANDBOX_ENV_: "ignored",
-        OPENAI_API_KEY: "",
+        T3_SANDBOX_ENV_EMPTY: "",
       }),
-    ).toEqual({ ANTHROPIC_API_KEY: "a", GH_TOKEN: "g" });
+    ).toEqual({ ANTHROPIC_API_KEY: "sandbox-key", GH_TOKEN: "g" });
   });
 });
