@@ -15,19 +15,27 @@ releases. Never point it at `pingdotgg/t3code`.
    server environment also works), and pick a size and the idle minutes (0 never stops).
 2. In a new thread's composer, choose **Run on → Boat sandbox**. That switches the thread to the
    Boat provider of the same agent family (Claude, Codex or Gemini). You can also pick
-   "Claude · Boat sandbox" (or Codex/Gemini) in the provider picker.
+   "Claude · Boat sandbox" (or Codex/Gemini) in the provider picker, which is how the stock mobile
+   app starts one. An agent can hand work off with `delegate_task` and
+   `target.providerInstanceId: "boatClaude"` (or `boatCodex`, `boatGemini`), so a prompt such as
+   "run this on Boat" works from any client.
 3. The first message creates the VM, installs the tools, clones the current branch from a git
    bundle to `/home/user/work/<name>`, applies your uncommitted changes (untracked files included,
    ignored files left out) as a patch, and runs the agent there.
 
-Agents on the VM use this machine's subscription logins by default (Settings → Environments →
-Boat sandbox → Use this machine's logins). Claude gets the Claude Code sign-in's access token, from
-the macOS keychain or `~/.claude/.credentials.json`, held only in the agent's memory. Codex gets
-the ChatGPT sign-in from `~/.codex/auth.json`, written 0600 to the VM home and deleted when the
-session ends. No API key goes over, and no refresh token either, because a VM refreshing a
-rotating token would sign this machine out. Logins are read again on every connection, so a
-resume picks up a sign-in refreshed here. An expired Claude login is not copied. Use Claude here
-once and send again.
+By default, agents on the VM sign in with the subscriptions connected to your boat.dev account
+(boat.dev dashboard → Agents & Proxying). boat.dev keeps those refreshed, so this works on a host
+nobody uses. Your boat.dev environment must have **Safe for third parties** turned off, or it
+withholds them. New VMs then also get that environment's variables and secrets.
+
+Settings → Environments → Boat sandbox → **Use this machine's logins** switches new VMs to this
+machine's sign-ins instead, with no boat.dev account environment. Claude gets the Claude Code
+sign-in's access token, from the macOS keychain or `~/.claude/.credentials.json`, held only in the
+agent's memory. Codex gets the ChatGPT sign-in from `~/.codex/auth.json`, written 0600 to the VM
+home and deleted when the session ends. No API key goes over, and no refresh token either, because
+a VM refreshing a rotating token would sign this machine out. Logins are read again on every
+connection, so a resume picks up a sign-in refreshed here. An expired Claude login is not copied.
+Use Claude here once and send again.
 
 As a fallback, variables set on the Boat provider instance in Settings → Providers as
 `T3_SANDBOX_ENV_<NAME>` reach the agent without the prefix and take precedence. The server's own
@@ -40,8 +48,10 @@ deleting the thread deletes the VM, and Settings lists every VM with Stop and De
 
 Diffs and checkpoints: Run on → Boat sandbox also picks a new worktree. After every turn the
 server copies the VM's working tree into that worktree before the turn ends, so T3's checkpoints,
-diffs and pull request actions see the agent's work. Only a T3 worktree is mirrored. A thread
-running in the project root keeps your checkout untouched and its diffs stay empty.
+diffs and pull request actions see the agent's work. Only a T3 worktree is mirrored. A new Boat
+thread launched at the project root, such as from the provider picker or a scheduled task, gets a
+new worktree from the server, so it is mirrored too. A thread running in the project root keeps
+your checkout untouched and its diffs stay empty.
 
 Tasks: the agent on the VM gets T3's own tools through the relay, plus `github_issue_create` and
 `sandbox_capacity`. `delegate_task` with `isolation: "worktree"` and a Boat provider starts a task
@@ -96,6 +106,7 @@ upstream files carry small hooks, which is where conflicts appear:
 | `apps/server/src/server.ts`                                 | `SandboxProvisioner.layer`             |
 | `apps/server/src/ws.ts`                                     | `...sandboxRpcHandlers(...)`           |
 | `apps/server/src/binMain.ts`                                | `__sandbox-acp` fast path              |
+| `apps/server/src/orchestration-v2/ThreadLaunchService.ts`   | `withSandboxWorktree` at launch        |
 | `apps/web/src/components/BranchToolbarEnvModeSelector.tsx`  | Run on → Boat sandbox                  |
 | `apps/web/src/components/BranchToolbar.tsx`, `ChatView.tsx` | pass `sandboxRunOn`                    |
 | `apps/web/src/components/settings/ConnectionsSettings.tsx`  | `<SandboxSettings />`                  |

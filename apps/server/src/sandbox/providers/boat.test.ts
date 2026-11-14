@@ -75,6 +75,7 @@ describe("Boat driver", () => {
       size: "small",
       idempotencyKey: "key-1",
       ttlSeconds: 1500,
+      accountEnvironment: true,
     });
 
     expect(created.id).toBe("bx_1");
@@ -85,7 +86,7 @@ describe("Boat driver", () => {
     ]);
     expect(creates[0]!.body).toEqual({
       monitoring: false,
-      noEnv: true,
+      noEnv: false,
       ttlSeconds: 1500,
       type: "small",
     });
@@ -100,9 +101,22 @@ describe("Boat driver", () => {
       ),
     ]);
     await expect(
-      driver.create({ name: "t3-abc", size: "small", idempotencyKey: "k", ttlSeconds: 60 }),
+      driver.create({
+        name: "t3-abc",
+        size: "small",
+        idempotencyKey: "k",
+        ttlSeconds: 60,
+        accountEnvironment: false,
+      }),
     ).rejects.toMatchObject({ status: 403, code: "billing_required" });
     expect(requests).toHaveLength(1);
+    // Copied logins replace the account environment.
+    expect(requests[0]!.body).toEqual({
+      monitoring: false,
+      noEnv: true,
+      ttlSeconds: 60,
+      type: "small",
+    });
   });
 
   it("resumes at the current type when boat.dev refuses a smaller one, then waits for hydration", async () => {

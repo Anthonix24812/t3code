@@ -339,6 +339,7 @@ const make = Effect.gen(function* () {
             size: row.size,
             idempotencyKey: row.idempotencyKey,
             ttlSeconds,
+            accountEnvironment: !settings.copyHostLogins,
           }),
         );
         row = { ...row, boatSandboxId: created.id };

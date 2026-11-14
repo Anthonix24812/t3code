@@ -60,7 +60,7 @@ export function SandboxSettings({ environmentId }: { readonly environmentId: Env
       />
       <SettingsRow
         title="Use this machine's logins"
-        description="VMs get this machine's Claude and ChatGPT (Codex) sign-in, never an API key or refresh token. T3_SANDBOX_ENV_<NAME> variables on a Boat provider take precedence."
+        description="Off: agents use the subscriptions connected on boat.dev, which it keeps refreshed. On: new VMs get this machine's Claude and Codex sign-in instead, which expires unless used here."
         control={
           <Switch
             checked={sandbox.copyHostLogins}

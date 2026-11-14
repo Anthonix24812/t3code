@@ -168,8 +168,6 @@ type NewTaskFlowContextValue = {
   readonly selectedModel: ModelSelection | null;
   readonly selectedModelOption: ModelOption | null;
   readonly selectedProviderStatus: ServerProvider | null;
-  /** The environment's providers, for choices that span instances such as Boat sandbox. */
-  readonly providers: ReadonlyArray<ServerProvider>;
   readonly providerGroups: ReadonlyArray<ProviderGroup>;
   readonly setProject: (project: EnvironmentProject) => void;
   /** The flow's project, read when a continuation resumes after an await. */
@@ -894,7 +892,6 @@ export function NewTaskFlowProvider(
     selectedModel,
     selectedModelOption,
     selectedProviderStatus,
-    providers: selectedEnvironmentServerConfig?.providers ?? [],
     providerGroups,
     setProject,
     getSelectedProjectKey: () => readFlow().projectKey,

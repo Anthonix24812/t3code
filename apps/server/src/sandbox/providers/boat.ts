@@ -484,10 +484,11 @@ export function createBoatDriver(options: BoatDriverOptions): SandboxDriver {
   return {
     async create(input) {
       const body = {
-        // VMs never receive the boat.dev account's own credentials or keep command output in
-        // boat.dev's history; T3 passes secrets per command.
+        // VMs never keep command output in boat.dev's history; T3 passes its secrets per command.
         monitoring: false,
-        noEnv: true,
+        // With the account environment, boat.dev signs agents in with the subscriptions connected
+        // to the account and keeps them refreshed. Without it, T3 sends this machine's logins.
+        noEnv: !input.accountEnvironment,
         ttlSeconds: input.ttlSeconds,
         type: BOAT_TYPES[input.size],
       };

@@ -1153,6 +1153,22 @@ it.effect("launches a worktree request for Scratch at the root, in its own folde
   }).pipe(Effect.provide(harness.layer));
 });
 
+// Fork: the stock mobile app launches Boat threads at the root; they need a worktree to mirror into.
+it("gives a new Boat thread launched at the root a worktree, except in Scratch", () => {
+  const boat = { instanceId: ProviderInstanceId.make("boatClaude"), model: "default" } as const;
+  const root = { ...launchInput({ command: "c", thread: "t" }), modelSelection: boat };
+  const strategy = (input: ThreadLaunch.ThreadLaunchInput, isScratch: boolean) =>
+    ThreadLaunch.withSandboxWorktree(input, isScratch).workspaceStrategy;
+  assert.deepEqual(strategy(root, false), { type: "worktree", baseRef: "HEAD" });
+  assert.deepEqual(
+    strategy({ ...root, workspaceStrategy: { type: "root", branch: "dev" } }, false),
+    { type: "worktree", baseRef: "dev" },
+  );
+  assert.deepEqual(strategy(root, true), { type: "root" });
+  assert.deepEqual(strategy({ ...root, reuseExistingThread: true }, false), { type: "root" });
+  assert.deepEqual(strategy({ ...root, modelSelection }, false), { type: "root" });
+});
+
 it.effect("stores a Scratch scheduled task at the root and keeps worktrees elsewhere", () => {
   const harness = scratchHarness();
   return Effect.gen(function* () {

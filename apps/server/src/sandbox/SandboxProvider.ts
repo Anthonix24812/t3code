@@ -8,6 +8,8 @@ export interface SandboxDriver {
     readonly size: SandboxSize;
     readonly idempotencyKey: string;
     readonly ttlSeconds: number;
+    /** Gives the VM the provider account's environment: its connected subscriptions and secrets. */
+    readonly accountEnvironment: boolean;
   }): Promise<{ readonly id: string }>;
   /** Boots a stopped VM from its snapshot and waits until it runs and its disk is restored. */
   resume(
