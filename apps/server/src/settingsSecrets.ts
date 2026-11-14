@@ -254,6 +254,12 @@ function mapSecretFieldGroups(
       voiceSecretFields,
       (provider) => `voice-cloud-${provider}`,
     ) as ServerSettings["cloudSpeechCredentials"],
+    // Fork: the Boat sandbox key (packages/contracts/src/sandbox.ts).
+    sandbox: mapFields(
+      settings.sandbox,
+      ["boatApiKey"],
+      () => "sandbox-boat-api-key",
+    ) as ServerSettings["sandbox"],
     providerInstances,
     sourceControlHosts,
     usageLimitSources,

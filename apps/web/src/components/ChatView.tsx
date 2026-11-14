@@ -399,6 +399,7 @@ const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_MODELS: ServerProvider["models"] = [];
 const EMPTY_USAGE_LIMIT_SOURCES: UsageLimitSourceSnapshots = [];
 import type { CodexArtifactTemplate } from "@t3tools/shared/codexArtifactTemplates";
+import { sandboxRunOnControl } from "../sandbox/sandboxRunOn";
 
 const EMPTY_FEEDBACK_SUBMISSIONS: ReadonlyArray<CodexFeedbackSubmission> = [];
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
@@ -2904,6 +2905,15 @@ export default function ChatView(props: ChatViewProps) {
     setPendingServerThreadStartFromOriginByThreadId,
     scheduleComposerFocus: scheduleComposerFocusStable,
   });
+  const sandboxRunOn = sandboxRunOnControl(
+    providerStatuses,
+    composerActiveProvider ?? threadProvider,
+    onProviderModelSelectStable,
+    // The server mirrors the VM's changes into the thread's worktree, so a sandbox needs one.
+    () => {
+      if (!envLocked && envMode !== "worktree") onEnvModeChangeStable("worktree");
+    },
+  );
   const { onResume, isResuming } = useComposerResume({
     environmentId,
     routeThreadKey,
@@ -3800,6 +3810,7 @@ export default function ChatView(props: ChatViewProps) {
                                   showGitControls={isGitRepo}
                                   {...(routeKind === "draft" && draftId ? { draftId } : {})}
                                   onEnvModeChange={onEnvModeChangeStable}
+                                  sandboxRunOn={sandboxRunOn}
                                   startFromOrigin={startFromOrigin}
                                   onStartFromOriginChange={onStartFromOriginChange}
                                   envMode={envMode}
@@ -3930,6 +3941,7 @@ export default function ChatView(props: ChatViewProps) {
                     ? { onEnvironmentChange: onEnvironmentChangeStable }
                     : {})}
                   onEnvModeChange={onEnvModeChangeStable}
+                  sandboxRunOn={sandboxRunOn}
                   envMode={envMode}
                   {...(canOverrideServerThreadEnvMode
                     ? {

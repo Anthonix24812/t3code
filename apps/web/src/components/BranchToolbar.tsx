@@ -5,7 +5,14 @@ import { stackedThreadToast, toastManager } from "./ui/toast";
 import { ComposerContextLabel } from "./ComposerContextLabel";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
-import { FolderGit2Icon, FolderGitIcon, FolderIcon, PlusIcon, ScaleIcon } from "lucide-react";
+import {
+  CloudIcon,
+  FolderGit2Icon,
+  FolderGitIcon,
+  FolderIcon,
+  PlusIcon,
+  ScaleIcon,
+} from "lucide-react";
 import {
   type Ref,
   type MouseEvent as ReactMouseEvent,
@@ -68,6 +75,7 @@ import { ComposerSurface } from "./chat/ComposerSurface";
 import { useComposerMenuProps } from "./chat/composerEventScope";
 import { cn } from "~/lib/utils";
 import { observeResize } from "~/lib/observeResize";
+import type { SandboxRunOnControl } from "~/sandbox/sandboxRunOn";
 
 export interface BranchToolbarHandle {
   openBranchPicker: () => void;
@@ -101,6 +109,7 @@ interface BranchToolbarProps {
   trailing?: ReactNode;
   availableEnvironments?: readonly EnvironmentOption[];
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
+  sandboxRunOn?: SandboxRunOnControl | undefined;
 }
 
 function showWorkspaceContextMenu(event: ReactMouseEvent, workspacePath: string) {
@@ -152,6 +161,7 @@ interface RunContextSelectorProps {
   onUsePreviousWorktree: () => void;
   addTargets: readonly AddProjectTarget[];
   onAddToMachine: (environmentId: EnvironmentId) => void;
+  sandboxRunOn?: SandboxRunOnControl | undefined;
 }
 
 const RunContextSelector = memo(function RunContextSelector({
@@ -175,6 +185,7 @@ const RunContextSelector = memo(function RunContextSelector({
   onUsePreviousWorktree,
   addTargets,
   onAddToMachine,
+  sandboxRunOn,
 }: RunContextSelectorProps) {
   const composerFloatingLayerProps = useComposerMenuProps();
   const activeEnvironment =
@@ -388,6 +399,7 @@ const RunContextSelector = memo(function RunContextSelector({
           <MenuRadioGroup
             value={effectiveEnvMode}
             onValueChange={(value) => {
+              if (sandboxRunOn?.active) sandboxRunOn.leave();
               if (value === "previous-worktree") {
                 onUsePreviousWorktree();
                 return;
@@ -418,6 +430,25 @@ const RunContextSelector = memo(function RunContextSelector({
             ) : null}
           </MenuRadioGroup>
         </MenuGroup>
+        {sandboxRunOn ? (
+          <>
+            <MenuSeparator />
+            <MenuGroup>
+              <MenuGroupLabel>Run on</MenuGroupLabel>
+              <MenuRadioGroup
+                value={sandboxRunOn.active ? "boat-sandbox" : ""}
+                onValueChange={() => sandboxRunOn.enter()}
+              >
+                <MenuRadioItem disabled={envModeLocked} value="boat-sandbox" closeOnClick>
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <CloudIcon className="size-3" />
+                    <span className="min-w-0 truncate">Boat sandbox</span>
+                  </span>
+                </MenuRadioItem>
+              </MenuRadioGroup>
+            </MenuGroup>
+          </>
+        ) : null}
       </MenuPopup>
     </Menu>
   );
@@ -610,6 +641,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   availableEnvironments,
   onEnvironmentChange,
   trailing,
+  sandboxRunOn,
 }: BranchToolbarProps) {
   const branchSelectorRef = useRef<BranchToolbarBranchSelectorHandle>(null);
   const threadRef = scopeThreadRef(environmentId, threadId);
@@ -705,6 +737,7 @@ export const BranchToolbar = memo(function BranchToolbar({
             onUsePreviousWorktree={onUsePreviousWorktree}
             addTargets={addTargets}
             onAddToMachine={onAddToMachine}
+            sandboxRunOn={sandboxRunOn}
           />
         ) : null}
         {panelSection !== "workspace" ? (
@@ -755,6 +788,7 @@ export const BranchToolbar = memo(function BranchToolbar({
             onUsePreviousWorktree={onUsePreviousWorktree}
             addTargets={addTargets}
             onAddToMachine={onAddToMachine}
+            sandboxRunOn={sandboxRunOn}
           />
         </div>
       ) : null}
@@ -796,6 +830,7 @@ export const BranchToolbar = memo(function BranchToolbar({
               previousWorktreeLabel={previousWorktreeLabel}
               previousWorktreeBranch={previousWorktreeSeed?.branch ?? null}
               onUsePreviousWorktree={onUsePreviousWorktree}
+              sandboxRunOn={sandboxRunOn}
             />
           ) : null}
         </div>

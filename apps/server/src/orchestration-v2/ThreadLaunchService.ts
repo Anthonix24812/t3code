@@ -20,6 +20,7 @@ import {
   type RuntimeMode,
   type ScheduledTaskId,
   ThreadId,
+  isSandboxProviderInstanceId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -108,6 +109,27 @@ export interface ThreadLaunchInput {
   /** The parent there, when that environment's agent delegated this as a task. */
   readonly delegatedFrom?: OrchestrationV2DelegatedFrom;
 }
+
+/**
+ * Fork: a new Boat thread needs a T3 worktree to mirror its VM into, whichever client launched it.
+ * The stock mobile app and scheduled tasks only pick the provider, so the server adds it here.
+ */
+export const withSandboxWorktree = (
+  request: ThreadLaunchInput,
+  isScratch: boolean,
+): ThreadLaunchInput =>
+  !isScratch &&
+  request.workspaceStrategy.type === "root" &&
+  request.reuseExistingThread !== true &&
+  isSandboxProviderInstanceId(request.modelSelection.instanceId)
+    ? {
+        ...request,
+        workspaceStrategy: {
+          type: "worktree",
+          baseRef: request.workspaceStrategy.branch ?? "HEAD",
+        },
+      }
+    : request;
 
 type PreparationInput = Pick<
   ThreadLaunchInput,
@@ -1047,11 +1069,11 @@ const make = Effect.gen(function* () {
     function* (request) {
       // Scratch has no Git repository. Normalize before folder allocation so
       // durable preparation and retries use the thread's own Scratch folder.
+      const isScratch = yield* managedFolders.isScratchProject(request.projectId);
       const input: ThreadLaunchInput =
-        request.workspaceStrategy.type === "worktree" &&
-        (yield* managedFolders.isScratchProject(request.projectId))
+        request.workspaceStrategy.type === "worktree" && isScratch
           ? { ...request, workspaceStrategy: { type: "root" } }
-          : request;
+          : withSandboxWorktree(request, isScratch);
       yield* ProjectCloneTracker.rejectCommandsDuringClone(cloneTracker, {
         type: "thread.create",
         projectId: input.projectId,

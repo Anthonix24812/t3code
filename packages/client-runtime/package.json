@@ -31,6 +31,10 @@
       "types": "./src/locales.ts",
       "default": "./src/locales.ts"
     },
+    "./sandbox-run-on": {
+      "types": "./src/sandboxRunOn.ts",
+      "default": "./src/sandboxRunOn.ts"
+    },
     "./model-search": {
       "types": "./src/modelSearch.ts",
       "default": "./src/modelSearch.ts"
